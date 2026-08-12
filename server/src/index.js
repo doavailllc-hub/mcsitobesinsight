@@ -9,6 +9,8 @@ import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } fro
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { pool } from './db.js';
 import { auth } from './middleware/auth.js';
+import { buildUserAccess, requirePermission } from './middleware/permissions.js';
+
 
 dotenv.config();
 
@@ -102,6 +104,30 @@ app.post('/api/auth/login', safe(async (req, res) => {
 }));
 
 app.use('/api', auth);
+app.get('/api/auth/me', safe(async (req, res) => {
+  const [user] = await q(
+    'SELECT id,name,email,role,status FROM users WHERE id=? LIMIT 1',
+    [req.user.id]
+  );
+
+  if (!user) {
+    return res.status(404).json({ message: 'User not found' });
+  }
+
+  const access = await buildUserAccess(user);
+
+  res.json({
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: access.globalRole,
+      status: user.status
+    },
+    permissions: access.globalPermissions,
+    company_access: access.companyAccess
+  });
+}));
 
 app.get('/api/dashboard', safe(async (req, res) => {
   const [[stats]] = await pool.query(`
@@ -237,7 +263,8 @@ app.get('/api/companies/:id', safe(async (req, res) => {
 
 // ---------- CREATE RECORDS ----------
 
-app.post('/api/finance', safe(async (req, res) => {
+app.post('/api/finance', requirePermission('finance.create'), safe(async (req, res) => {
+
   const { company_id, date, type, category, description, amount, currency = 'INR' } = req.body;
   if (!company_id || !date || !type) return res.status(400).json({ message: 'Company, date and type are required' });
   if (!['income', 'expense', 'capital', 'loan', 'intercompany'].includes(type))
@@ -1042,7 +1069,23 @@ const routes = {
   '/users': `SELECT u.id,u.name,u.email,u.role,COALESCE(GROUP_CONCAT(c.name ORDER BY c.name SEPARATOR ', '),'Group / No company') company_access,u.status FROM users u LEFT JOIN user_company_access a ON a.user_id=u.id LEFT JOIN companies c ON c.id=a.company_id GROUP BY u.id,u.name,u.email,u.role,u.status ORDER BY u.name`,
   '/audit': `SELECT a.id,DATE_FORMAT(a.created_at,'%Y-%m-%d %H:%i') created_at,u.name user_name,a.action,a.entity_type,a.entity_name,a.ip_address FROM audit_logs a LEFT JOIN users u ON u.id=a.user_id ORDER BY a.created_at DESC LIMIT 250`
 };
-
+app.get('/api/finance-secure',
+  requirePermission('finance.view'),
+  safe(async (req, res) => {
+    res.json(await q(
+      `SELECT f.id,
+              DATE_FORMAT(f.date,'%Y-%m-%d') date,
+              c.name company_name,
+              f.type,
+              f.category,
+              f.description,
+              f.amount
+       FROM finance_transactions f
+       JOIN companies c ON c.id=f.company_id
+       ORDER BY f.date DESC`
+    ));
+  })
+);
 Object.entries(routes).forEach(([path, sql]) =>
   app.get('/api' + path, safe(async (req, res) => res.json(await q(sql))))
 );
