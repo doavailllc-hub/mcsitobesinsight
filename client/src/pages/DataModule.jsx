@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Search, Eye, Download, ShieldCheck, X, Pencil, Trash2 } from 'lucide-react';
-import { api } from '../lib/api';
+import { Plus, Search, Eye, Download, ShieldCheck, X, Pencil, Trash2, Copy } from 'lucide-react';
+import { api, getPermissions, getUser } from '../lib/api';
 
 const config = {
   finance: {
@@ -241,6 +241,87 @@ const config = {
 const pretty = s => s.replaceAll('_', ' ').replace(/\b\w/g, m => m.toUpperCase());
 const moneyKeys = new Set(['amount', 'salary', 'gross_salary', 'deduction', 'net_salary', 'monthly_rent', 'purchase_cost', 'security_deposit']);
 
+const actionPermissions = {
+  finance: {
+    create: 'finance.create',
+    edit: 'finance.edit',
+    delete: 'finance.delete'
+  },
+  people: {
+    create: 'people.manage',
+    edit: 'people.manage',
+    delete: 'people.manage'
+  },
+  employees: {
+    create: 'employees.manage',
+    edit: 'employees.manage',
+    delete: 'employees.manage'
+  },
+  payroll: {
+    create: 'payroll.manage',
+    edit: 'payroll.manage',
+    delete: 'payroll.manage'
+  },
+  reminders: {
+    create: 'reminders.manage',
+    edit: 'reminders.manage',
+    delete: 'reminders.manage'
+  },
+  assets: {
+    create: 'assets.manage',
+    edit: 'assets.manage',
+    delete: 'assets.manage'
+  },
+  offices: {
+    create: 'offices.manage',
+    edit: 'offices.manage',
+    delete: 'offices.manage'
+  },
+  domains: {
+    create: 'domains.manage',
+    edit: 'domains.manage',
+    delete: 'domains.manage'
+  },
+  emails: {
+    create: 'emails.manage',
+    edit: 'emails.manage',
+    delete: 'emails.manage'
+  },
+  social: {
+    create: 'social.manage',
+    edit: 'social.manage',
+    delete: 'social.manage'
+  },
+  credentials: {
+    create: 'credentials.manage',
+    edit: 'credentials.manage',
+    delete: 'credentials.manage',
+    reveal: 'credentials.view_secret'
+  },
+  files: {
+    create: 'files.manage',
+    edit: 'files.manage',
+    delete: 'files.manage'
+  },
+  products: {
+    create: 'products.manage',
+    edit: 'products.manage',
+    delete: 'products.manage'
+  },
+  bank: {
+    create: 'bank.manage',
+    edit: 'bank.manage',
+    delete: 'bank.manage'
+  },
+  users: {
+    create: 'users.manage',
+    edit: 'users.manage',
+    delete: 'users.manage'
+  },
+  audit: {}
+};
+
+
 function defaultsFor(fields = []) {
   return fields.reduce((acc, f) => {
     acc[f.key] = f.type === 'checkbox' ? Boolean(f.default) :
@@ -261,6 +342,21 @@ export default function DataModule({ type }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [editingId, setEditingId] = useState(null);
+  const [revealedSecret, setRevealedSecret] = useState(null);
+  const user = getUser();
+  const permissions = getPermissions();
+  const permissionSet = new Set(permissions);
+  const isGroupAdmin = user?.role === 'group_admin';
+  const action = actionPermissions[type] || {};
+
+  const can = permission =>
+    Boolean(permission) &&
+    (isGroupAdmin || permissionSet.has(permission));
+
+  const canCreate = can(action.create);
+  const canEdit = can(action.edit);
+  const canDelete = can(action.delete);
+  const canReveal = can(action.reveal);
 
   const loadRows = async () => {
     try {
@@ -284,7 +380,7 @@ export default function DataModule({ type }) {
   );
 
   const openAdd = async () => {
-    if (!c.fields) return;
+    if (!c.fields || !canCreate) return;
     setEditingId(null);
     setError('');
     setForm(defaultsFor(c.fields));
@@ -311,7 +407,7 @@ export default function DataModule({ type }) {
   };
 
   const editRecord = async id => {
-    if (!c.fields) return;
+    if (!c.fields || !canEdit) return;
     setError('');
     try {
       await loadOptions();
@@ -337,6 +433,7 @@ export default function DataModule({ type }) {
   };
 
   const deleteRecord = async (id, row) => {
+    if (!canDelete) return;
     const label = row.name || row.title || row.email || row.domain || row.service_name || row.bank_name || `record #${id}`;
     if (!window.confirm(`Delete "${label}"? This action cannot be undone.`)) return;
 
@@ -345,6 +442,35 @@ export default function DataModule({ type }) {
       await loadRows();
     } catch (err) {
       window.alert(err.response?.data?.message || err.response?.data?.detail || 'Unable to delete record.');
+    }
+  };
+
+  const revealCredential = async row => {
+    if (!canReveal) return;
+
+    try {
+      const response = await api.get(`/credentials/${row.id}/reveal`);
+      setRevealedSecret({
+        service: row.service_name || 'Credential',
+        username: row.username || '',
+        secret: response.data?.secret || ''
+      });
+    } catch (err) {
+      window.alert(
+        err.response?.data?.message ||
+        err.response?.data?.detail ||
+        'Unable to reveal this credential.'
+      );
+    }
+  };
+
+  const copySecret = async () => {
+    if (!revealedSecret?.secret) return;
+
+    try {
+      await navigator.clipboard.writeText(revealedSecret.secret);
+    } catch {
+      window.alert('Unable to copy the secret.');
     }
   };
 
@@ -368,6 +494,14 @@ export default function DataModule({ type }) {
   const save = async e => {
     e.preventDefault();
     setError('');
+
+    if (editingId && !canEdit) {
+      return setError('You do not have permission to edit this record.');
+    }
+
+    if (!editingId && !canCreate) {
+      return setError('You do not have permission to create this record.');
+    }
 
     for (const field of c.fields || []) {
       if (field.required && !(editingId && (field.key === 'password' || field.key === 'secret'))) {
@@ -402,7 +536,9 @@ export default function DataModule({ type }) {
         </div>
         {type === 'audit'
           ? <span className="secure"><ShieldCheck size={16} />Immutable activity trail</span>
-          : <button className="primary-btn" onClick={openAdd}><Plus size={17} />Add record</button>}
+          : canCreate
+            ? <button className="primary-btn" onClick={openAdd}><Plus size={17} />Add record</button>
+            : <span className="secure"><ShieldCheck size={16} />Read-only access</span>}
       </header>
 
       <div className="toolbar">
@@ -421,7 +557,10 @@ export default function DataModule({ type }) {
         <div className="table-scroll">
           <table>
             <thead>
-              <tr>{c.cols.map(x => <th key={x}>{pretty(x)}</th>)}<th></th></tr>
+              <tr>
+                {c.cols.map(x => <th key={x}>{pretty(x)}</th>)}
+                {(canEdit || canDelete || canReveal) && <th></th>}
+              </tr>
             </thead>
             <tbody>
               {filtered.map((r, i) => (
@@ -433,16 +572,44 @@ export default function DataModule({ type }) {
                         : render(r[k], k)}
                     </td>
                   ))}
-                  <td className="actions">
-                    <div style={styles.rowActions}>
-                      <button type="button" title="Edit" style={styles.actionIcon} onClick={() => editRecord(r.id)}>
-                        {type === 'credentials' ? <Eye size={16} /> : <Pencil size={16} />}
-                      </button>
-                      <button type="button" title="Delete" style={styles.actionIconDanger} onClick={() => deleteRecord(r.id, r)}>
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </td>
+                  {(canEdit || canDelete || canReveal) && (
+                    <td className="actions">
+                      <div style={styles.rowActions}>
+                        {type === 'credentials' && canReveal && (
+                          <button
+                            type="button"
+                            title="Reveal secret"
+                            style={styles.actionIcon}
+                            onClick={() => revealCredential(r)}
+                          >
+                            <Eye size={16} />
+                          </button>
+                        )}
+
+                        {canEdit && (
+                          <button
+                            type="button"
+                            title="Edit"
+                            style={styles.actionIcon}
+                            onClick={() => editRecord(r.id)}
+                          >
+                            <Pencil size={16} />
+                          </button>
+                        )}
+
+                        {canDelete && (
+                          <button
+                            type="button"
+                            title="Delete"
+                            style={styles.actionIconDanger}
+                            onClick={() => deleteRecord(r.id, r)}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -487,6 +654,61 @@ export default function DataModule({ type }) {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {revealedSecret && (
+        <div
+          style={styles.secretBackdrop}
+          onMouseDown={e => {
+            if (e.target === e.currentTarget) setRevealedSecret(null);
+          }}
+        >
+          <div style={styles.secretCard}>
+            <div style={styles.secretHeader}>
+              <div>
+                <p className="eyebrow">SECURE CREDENTIAL</p>
+                <h2 style={{ margin: '4px 0 0' }}>{revealedSecret.service}</h2>
+              </div>
+              <button
+                type="button"
+                style={styles.iconButton}
+                onClick={() => setRevealedSecret(null)}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {revealedSecret.username && (
+              <div style={styles.secretField}>
+                <span>Username</span>
+                <strong>{revealedSecret.username}</strong>
+              </div>
+            )}
+
+            <div style={styles.secretField}>
+              <span>Password / Secret</span>
+              <div style={styles.secretValueRow}>
+                <code style={styles.secretValue}>
+                  {revealedSecret.secret || 'No secret saved'}
+                </code>
+                {revealedSecret.secret && (
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={copySecret}
+                  >
+                    <Copy size={15} />
+                    Copy
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div style={styles.secretWarning}>
+              This reveal is recorded in the audit log.
+            </div>
           </div>
         </div>
       )}
@@ -655,5 +877,32 @@ const styles = {
   actionIconDanger: {
     width: '34px', height: '34px', display: 'grid', placeItems: 'center',
     border: '1px solid #fecdca', borderRadius: '8px', background: '#fff', cursor: 'pointer', color: '#b42318'
+  },
+  secretBackdrop: {
+    position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(15,23,42,.48)',
+    display: 'grid', placeItems: 'center', padding: '20px'
+  },
+  secretCard: {
+    width: 'min(520px,100%)', background: '#fff', borderRadius: '14px',
+    boxShadow: '0 24px 70px rgba(15,23,42,.22)', padding: '24px'
+  },
+  secretHeader: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+    gap: '16px', marginBottom: '22px'
+  },
+  secretField: {
+    display: 'grid', gap: '8px', padding: '14px 0', borderTop: '1px solid #eaecf0'
+  },
+  secretValueRow: {
+    display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap'
+  },
+  secretValue: {
+    flex: 1, minWidth: 0, overflowWrap: 'anywhere', padding: '11px 12px',
+    border: '1px solid #e4e7ec', borderRadius: '9px', background: '#f8fafc',
+    color: '#101828', fontSize: '14px'
+  },
+  secretWarning: {
+    marginTop: '8px', padding: '10px 12px', borderRadius: '9px',
+    background: '#fffaeb', color: '#7a2e0e', fontSize: '12px'
   }
 };

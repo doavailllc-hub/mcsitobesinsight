@@ -3,7 +3,7 @@ import {
   Upload, FolderPlus, Folder, FileText, Image as ImageIcon, Download, ExternalLink,
   Trash2, Pencil, ChevronRight, Home, Search, X, MoreVertical, Grid3X3
 } from 'lucide-react';
-import { api } from '../lib/api';
+import { api, getPermissions, getUser } from '../lib/api';
 
 export default function Files() {
   const [companies, setCompanies] = useState([]);
@@ -19,6 +19,14 @@ export default function Files() {
   const [folderName, setFolderName] = useState('');
   const [error, setError] = useState('');
   const inputRef = useRef(null);
+
+  const user = getUser();
+  const permissionSet = new Set(getPermissions());
+  const isGroupAdmin = user?.role === 'group_admin';
+  const can = permission => isGroupAdmin || permissionSet.has(permission);
+
+  const canUpload = can('files.upload') || can('files.manage');
+  const canManage = can('files.manage');
 
   const currentCompany = companies.find(c => Number(c.id) === Number(companyId));
   const currentFolder = folders.find(f => Number(f.id) === Number(folderId));
@@ -78,6 +86,7 @@ export default function Files() {
 
   const createFolder = async e => {
     e.preventDefault();
+    if (!canManage) return;
     setError('');
     if (!folderName.trim()) return setError('Folder name is required.');
     try {
@@ -95,6 +104,7 @@ export default function Files() {
   };
 
   const renameFolder = async folder => {
+    if (!canManage) return;
     const name = window.prompt('Rename folder', folder.name);
     if (!name || name.trim() === folder.name) return;
     await api.put(`/file-folders/${folder.id}`, { name: name.trim() });
@@ -102,6 +112,7 @@ export default function Files() {
   };
 
   const deleteFolder = async folder => {
+    if (!canManage) return;
     if (!window.confirm(`Delete folder "${folder.name}"? The folder must be empty.`)) return;
     try {
       await api.delete(`/file-folders/${folder.id}`);
@@ -112,6 +123,7 @@ export default function Files() {
   };
 
   const deleteFile = async file => {
+    if (!canManage) return;
     if (!window.confirm(`Delete "${file.name}" from Insight and AWS S3?`)) return;
     try {
       await api.delete(`/file-items/${file.id}`);
@@ -123,6 +135,7 @@ export default function Files() {
 
   const saveFile = async e => {
     e.preventDefault();
+    if (!canManage) return;
     try {
       await api.put(`/file-items/${editFile.id}`, {
         name: editFile.name,
@@ -154,12 +167,19 @@ export default function Files() {
           <p>Private company files stored securely in AWS S3.</p>
         </div>
         <div style={s.headerActions}>
-          <button className="secondary-btn" onClick={() => { setError(''); setFolderOpen(true); }}>
-            <FolderPlus size={17}/>New folder
-          </button>
-          <button className="primary-btn" onClick={() => setUploadOpen(true)}>
-            <Upload size={17}/>Upload files
-          </button>
+          {canManage && (
+            <button className="secondary-btn" onClick={() => { setError(''); setFolderOpen(true); }}>
+              <FolderPlus size={17}/>New folder
+            </button>
+          )}
+          {canUpload && (
+            <button className="primary-btn" onClick={() => setUploadOpen(true)}>
+              <Upload size={17}/>Upload files
+            </button>
+          )}
+          {!canUpload && !canManage && (
+            <span className="secure">Read-only access</span>
+          )}
         </div>
       </header>
 
@@ -199,10 +219,12 @@ export default function Files() {
                         <span style={s.meta}>{folder.file_count} files · {folder.child_folders} folders</span>
                       </div>
                     </button>
-                    <div style={s.smallActions}>
-                      <button style={s.iconBtn} title="Rename" onClick={() => renameFolder(folder)}><Pencil size={15}/></button>
-                      <button style={s.iconDanger} title="Delete" onClick={() => deleteFolder(folder)}><Trash2 size={15}/></button>
-                    </div>
+                    {canManage && (
+                      <div style={s.smallActions}>
+                        <button style={s.iconBtn} title="Rename" onClick={() => renameFolder(folder)}><Pencil size={15}/></button>
+                        <button style={s.iconDanger} title="Delete" onClick={() => deleteFolder(folder)}><Trash2 size={15}/></button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -217,7 +239,7 @@ export default function Files() {
                 <Upload size={26}/>
                 <strong>No files in this folder</strong>
                 <span>Upload PDFs, images, Office documents, text files or ZIP archives.</span>
-                <button className="primary-btn" onClick={() => setUploadOpen(true)}>Upload files</button>
+                {canUpload && <button className="primary-btn" onClick={() => setUploadOpen(true)}>Upload files</button>}
               </div>
             ) : (
               <div style={s.gallery}>
@@ -245,12 +267,16 @@ export default function Files() {
                           <a style={s.iconLink} title="Download" href={file.download_url} target="_blank" rel="noreferrer">
                             <Download size={16}/>
                           </a>
-                          <button style={s.iconBtn} title="Edit / Move" onClick={() => setEditFile({ ...file })}>
-                            <Pencil size={16}/>
-                          </button>
-                          <button style={s.iconDanger} title="Delete" onClick={() => deleteFile(file)}>
-                            <Trash2 size={16}/>
-                          </button>
+                          {canManage && (
+                            <>
+                              <button style={s.iconBtn} title="Edit / Move" onClick={() => setEditFile({ ...file })}>
+                                <Pencil size={16}/>
+                              </button>
+                              <button style={s.iconDanger} title="Delete" onClick={() => deleteFile(file)}>
+                                <Trash2 size={16}/>
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
                     </article>
@@ -262,7 +288,7 @@ export default function Files() {
         </>
       )}
 
-      {uploadOpen && (
+      {uploadOpen && canUpload && (
         <UploadModal
           companyId={companyId}
           folderId={folderId}
@@ -272,7 +298,7 @@ export default function Files() {
         />
       )}
 
-      {folderOpen && (
+      {folderOpen && canManage && (
         <div style={s.backdrop} onMouseDown={e => e.target === e.currentTarget && setFolderOpen(false)}>
           <div style={s.modalSmall}>
             <div style={s.modalHead}>
@@ -293,7 +319,7 @@ export default function Files() {
         </div>
       )}
 
-      {editFile && (
+      {editFile && canManage && (
         <div style={s.backdrop} onMouseDown={e => e.target === e.currentTarget && setEditFile(null)}>
           <div style={s.modalSmall}>
             <div style={s.modalHead}>

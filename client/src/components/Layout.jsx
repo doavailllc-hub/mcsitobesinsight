@@ -136,6 +136,17 @@ export default function Layout() {
       .filter((section) => section.items.length > 0);
   }, [user, permissions]);
 
+  const roleLabels = {
+    group_admin: 'Group Admin',
+    company_admin: 'Company Admin',
+    accountant: 'Accountant',
+    hr_manager: 'HR Manager',
+    document_manager: 'Document Manager',
+    it_admin: 'IT Admin',
+    management_viewer: 'Management Viewer',
+    viewer: 'Viewer'
+  };
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -183,7 +194,7 @@ export default function Layout() {
 
           <div>
             <strong>{user?.name || 'Admin'}</strong>
-            <span>{user?.role || 'viewer'}</span>
+            <span>{roleLabels[user?.role] || user?.role || 'Viewer'}</span>
           </div>
 
           <button

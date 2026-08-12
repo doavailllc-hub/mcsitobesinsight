@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Search, ArrowUpRight, X, Trash2 } from 'lucide-react';
-import { api } from '../lib/api';
+import { Plus, Search, ArrowUpRight, X, Trash2, Pencil, ShieldCheck } from 'lucide-react';
+import { api, getPermissions, getUser } from '../lib/api';
 
 const emptyForm = {
   name: '',
@@ -23,6 +23,12 @@ export default function Companies() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [editingId, setEditingId] = useState(null);
+
+  const user = getUser();
+  const permissionSet = new Set(getPermissions());
+  const isGroupAdmin = user?.role === 'group_admin';
+  const canManage = isGroupAdmin || permissionSet.has('companies.manage');
 
   const loadCompanies = async () => {
     try {
@@ -79,8 +85,84 @@ export default function Companies() {
   const closeModal = () => {
     if (saving) return;
     setOpen(false);
+    setEditingId(null);
     setError('');
     setForm(emptyForm);
+  };
+
+  const openCreate = () => {
+    if (!canManage) return;
+    setEditingId(null);
+    setForm(emptyForm);
+    setError('');
+    setOpen(true);
+  };
+
+  const openEdit = async companyId => {
+    if (!canManage) return;
+
+    setError('');
+
+    try {
+      const response = await api.get(`/companies/${companyId}`);
+      const company = response.data?.company || {};
+      const shareholders = Array.isArray(response.data?.shareholders)
+        ? response.data.shareholders
+        : [];
+
+      setEditingId(companyId);
+      setForm({
+        name: company.name || '',
+        legal_name: company.legal_name || '',
+        company_type: company.company_type || 'Subsidiary / Partner Company',
+        industry: company.industry || '',
+        sanleo_share: company.sanleo_share ?? '',
+        country: company.country || 'India',
+        currency: company.currency || 'INR',
+        status: company.status || 'active',
+        shareholders: shareholders.length
+          ? shareholders.map(s => ({
+              shareholder_name: s.shareholder_name || '',
+              shareholder_type: s.shareholder_type || 'Individual',
+              share_percent: s.share_percent ?? ''
+            }))
+          : [{
+              shareholder_name: 'Sanleo Capital',
+              shareholder_type: 'Company',
+              share_percent: company.sanleo_share ?? ''
+            }]
+      });
+
+      setOpen(true);
+    } catch (err) {
+      setError(
+        err.response?.data?.message ||
+        'Unable to load this company.'
+      );
+    }
+  };
+
+  const deleteCompany = async company => {
+    if (!canManage) return;
+
+    if (
+      !window.confirm(
+        `Delete "${company.name}"? If it has related records, Insight will block deletion and you can deactivate it instead.`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      await api.delete(`/companies/${company.id}`);
+      await loadCompanies();
+    } catch (err) {
+      window.alert(
+        err.response?.data?.message ||
+        err.response?.data?.detail ||
+        'Unable to delete company.'
+      );
+    }
   };
 
   const saveCompany = async e => {
@@ -101,18 +183,29 @@ export default function Companies() {
     if (shareholders.length && Math.abs(totalShare - 100) > 0.001)
       return setError(`Shareholder total must be 100%. Current total is ${totalShare}%.`);
 
+    if (!canManage) {
+      return setError('You do not have permission to manage companies.');
+    }
+
     try {
       setSaving(true);
-      await api.post('/companies', {
+
+      const payload = {
         ...form,
         legal_name: form.legal_name.trim() || form.name.trim(),
         sanleo_share: sanleoShare,
         shareholders
-      });
+      };
+
+      if (editingId) {
+        await api.put(`/companies/${editingId}`, payload);
+      } else {
+        await api.post('/companies', payload);
+      }
       await loadCompanies();
       closeModal();
     } catch (err) {
-      setError(err.response?.data?.message || 'Unable to add company.');
+      setError(err.response?.data?.message || (editingId ? 'Unable to update company.' : 'Unable to add company.'));
     } finally {
       setSaving(false);
     }
@@ -137,9 +230,15 @@ export default function Companies() {
           <h1>Companies</h1>
           <p>Subsidiaries, joint ventures and partner companies.</p>
         </div>
-        <button className="primary-btn" onClick={() => setOpen(true)}>
-          <Plus size={17} /> Add company
-        </button>
+        {canManage ? (
+          <button className="primary-btn" onClick={openCreate}>
+            <Plus size={17} /> Add company
+          </button>
+        ) : (
+          <span className="secure">
+            <ShieldCheck size={16} /> Read-only access
+          </span>
+        )}
       </header>
 
       <div className="toolbar">
@@ -160,29 +259,95 @@ export default function Companies() {
 
       <section className="cards-grid">
         {filtered.map(c => (
-          <Link className="company-card" to={`/companies/${c.id}`} key={c.id}>
-            <div className="company-card-top">
-              <div className="company-logo">{c.name.slice(0, 2).toUpperCase()}</div>
-              <ArrowUpRight size={18} />
+          <article key={c.id} style={styles.companyCard}>
+            <div style={styles.cardContent}>
+              <div style={styles.cardTop}>
+                <div style={styles.companyIdentity}>
+                  <div className="company-logo">
+                    {c.name.slice(0, 2).toUpperCase()}
+                  </div>
+
+                  <div style={styles.companyTitle}>
+                    <h3 style={styles.companyName}>{c.name}</h3>
+                    <p style={styles.companyIndustry}>{c.industry || '—'}</p>
+                  </div>
+                </div>
+
+                <span
+                  style={{
+                    ...styles.statusBadge,
+                    ...(String(c.status).toLowerCase() === 'inactive'
+                      ? styles.statusInactive
+                      : styles.statusActive)
+                  }}
+                >
+                  {c.status || 'active'}
+                </span>
+              </div>
+
+              <div style={styles.infoGrid}>
+                <div style={styles.infoItem}>
+                  <span style={styles.infoLabel}>Type</span>
+                  <strong style={styles.infoValue}>{c.company_type || '—'}</strong>
+                </div>
+
+                <div style={styles.infoItem}>
+                  <span style={styles.infoLabel}>Sanleo share</span>
+                  <strong style={styles.infoValue}>
+                    {Number(c.sanleo_share || 0).toFixed(2)}%
+                  </strong>
+                </div>
+              </div>
+
+              <div style={styles.progressTrack}>
+                <span
+                  style={{
+                    ...styles.progressFill,
+                    width: `${Math.min(100, Math.max(0, Number(c.sanleo_share || 0)))}%`
+                  }}
+                />
+              </div>
             </div>
-            <h3>{c.name}</h3>
-            <p>{c.industry}</p>
-            <div className="mini-grid">
-              <div><span>Type</span><b>{c.company_type}</b></div>
-              <div><span>Sanleo share</span><b>{c.sanleo_share}%</b></div>
+
+            <div style={styles.cardFooter}>
+              <Link style={styles.detailsLink} to={`/companies/${c.id}`}>
+                View details
+                <ArrowUpRight size={15} />
+              </Link>
+
+              {canManage && (
+                <div style={styles.cardActions}>
+                  <button
+                    type="button"
+                    style={styles.actionIcon}
+                    title="Edit company"
+                    onClick={() => openEdit(c.id)}
+                  >
+                    <Pencil size={16} />
+                  </button>
+
+                  <button
+                    type="button"
+                    style={styles.actionIconDanger}
+                    title="Delete company"
+                    onClick={() => deleteCompany(c)}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              )}
             </div>
-            <div className="progress"><i style={{ width: `${c.sanleo_share}%` }} /></div>
-          </Link>
+          </article>
         ))}
       </section>
 
-      {open && (
+      {open && canManage && (
         <div style={styles.backdrop} onMouseDown={e => e.target === e.currentTarget && closeModal()}>
           <div style={styles.modal}>
             <div style={styles.modalHeader}>
               <div>
                 <p className="eyebrow">ORGANIZATION</p>
-                <h2 style={{ margin: '4px 0 0' }}>Add company</h2>
+                <h2 style={{ margin: '4px 0 0' }}>{editingId ? 'Edit company' : 'Add company'}</h2>
               </div>
               <button type="button" onClick={closeModal} style={styles.iconButton}>
                 <X size={20} />
@@ -293,7 +458,7 @@ export default function Companies() {
               <div style={styles.actions}>
                 <button type="button" onClick={closeModal} style={styles.cancelButton}>Cancel</button>
                 <button className="primary-btn" type="submit" disabled={saving}>
-                  {saving ? 'Saving...' : 'Create company'}
+                  {saving ? 'Saving...' : editingId ? 'Update company' : 'Create company'}
                 </button>
               </div>
             </form>
@@ -351,5 +516,160 @@ const styles = {
   },
   cancelButton: {
     border: '1px solid #d0d5dd', background: '#fff', borderRadius: '9px', padding: '10px 16px', cursor: 'pointer'
+  },
+  companyCard: {
+    minWidth: 0,
+    minHeight: 260,
+    border: '1px solid #e4e7ec',
+    borderRadius: 14,
+    background: '#fff',
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
+    boxShadow: '0 1px 2px rgba(16,24,40,.03)'
+  },
+  cardContent: {
+    padding: 18,
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1
+  },
+  cardTop: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    minWidth: 0
+  },
+  companyIdentity: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    minWidth: 0,
+    flex: 1
+  },
+  companyTitle: {
+    minWidth: 0,
+    flex: 1
+  },
+  companyName: {
+    margin: 0,
+    color: '#101828',
+    fontSize: 17,
+    lineHeight: 1.3,
+    fontWeight: 700,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap'
+  },
+  companyIndustry: {
+    margin: '4px 0 0',
+    color: '#667085',
+    fontSize: 13,
+    lineHeight: 1.4,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap'
+  },
+  statusBadge: {
+    flex: '0 0 auto',
+    borderRadius: 999,
+    padding: '4px 8px',
+    fontSize: 11,
+    lineHeight: 1,
+    fontWeight: 700,
+    textTransform: 'capitalize'
+  },
+  statusActive: {
+    background: '#ecfdf3',
+    color: '#027a48'
+  },
+  statusInactive: {
+    background: '#f2f4f7',
+    color: '#667085'
+  },
+  infoGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) minmax(110px, .65fr)',
+    gap: 18,
+    marginTop: 30,
+    alignItems: 'start'
+  },
+  infoItem: {
+    minWidth: 0,
+    display: 'grid',
+    gap: 5
+  },
+  infoLabel: {
+    color: '#98a2b3',
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: '.04em',
+    textTransform: 'uppercase'
+  },
+  infoValue: {
+    color: '#101828',
+    fontSize: 12,
+    lineHeight: 1.45,
+    overflowWrap: 'anywhere'
+  },
+  progressTrack: {
+    height: 6,
+    borderRadius: 999,
+    background: '#eaecf0',
+    overflow: 'hidden',
+    marginTop: 'auto'
+  },
+  progressFill: {
+    display: 'block',
+    height: '100%',
+    borderRadius: 999,
+    background: '#101828'
+  },
+  cardFooter: {
+    minHeight: 58,
+    borderTop: '1px solid #eaecf0',
+    padding: '10px 12px 10px 18px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12
+  },
+  detailsLink: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 7,
+    color: '#344054',
+    textDecoration: 'none',
+    fontSize: 13,
+    fontWeight: 600
+  },
+  cardActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    flex: '0 0 auto'
+  },
+  actionIcon: {
+    width: 34,
+    height: 34,
+    border: '1px solid #e4e7ec',
+    borderRadius: 8,
+    background: '#fff',
+    display: 'grid',
+    placeItems: 'center',
+    cursor: 'pointer',
+    color: '#344054'
+  },
+  actionIconDanger: {
+    width: 34,
+    height: 34,
+    border: '1px solid #fecdca',
+    borderRadius: 8,
+    background: '#fff',
+    display: 'grid',
+    placeItems: 'center',
+    cursor: 'pointer',
+    color: '#b42318'
   }
 };
