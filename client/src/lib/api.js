@@ -5,14 +5,16 @@ export const api = axios.create({
 });
 
 api.interceptors.request.use((config) => {
-  const t = localStorage.getItem('insight_token');
+  const t = localStorage.getItem('insight_token') || sessionStorage.getItem('insight_token');
   if (t) config.headers.Authorization = `Bearer ${t}`;
   return config;
 });
 
-export const setSession = (token, user) => {
-  localStorage.setItem('insight_token', token);
-  localStorage.setItem('insight_user', JSON.stringify(user));
+export const setSession = (token, user, persistent = true) => {
+  clearSession();
+  const storage = persistent ? localStorage : sessionStorage;
+  storage.setItem('insight_token', token);
+  storage.setItem('insight_user', JSON.stringify(user));
 };
 
 export const clearSession = () => {
@@ -20,11 +22,15 @@ export const clearSession = () => {
   localStorage.removeItem('insight_user');
   localStorage.removeItem('insight_permissions');
   localStorage.removeItem('insight_company_access');
+  sessionStorage.removeItem('insight_token');
+  sessionStorage.removeItem('insight_user');
+  sessionStorage.removeItem('insight_permissions');
+  sessionStorage.removeItem('insight_company_access');
 };
 
 export const getUser = () => {
   try {
-    return JSON.parse(localStorage.getItem('insight_user'));
+    return JSON.parse(localStorage.getItem('insight_user') || sessionStorage.getItem('insight_user'));
   } catch {
     return null;
   }
@@ -32,7 +38,7 @@ export const getUser = () => {
 
 export const getPermissions = () => {
   try {
-    return JSON.parse(localStorage.getItem('insight_permissions')) || [];
+    return JSON.parse(localStorage.getItem('insight_permissions') || sessionStorage.getItem('insight_permissions')) || [];
   } catch {
     return [];
   }
@@ -40,7 +46,7 @@ export const getPermissions = () => {
 
 export const getCompanyAccess = () => {
   try {
-    return JSON.parse(localStorage.getItem('insight_company_access')) || {};
+    return JSON.parse(localStorage.getItem('insight_company_access') || sessionStorage.getItem('insight_company_access')) || {};
   } catch {
     return {};
   }
@@ -56,15 +62,17 @@ export const refreshAccess = async () => {
   const { data } = await api.get('/auth/me');
 
   if (data?.user) {
-    localStorage.setItem('insight_user', JSON.stringify(data.user));
+    const storage = localStorage.getItem('insight_token') ? localStorage : sessionStorage;
+    storage.setItem('insight_user', JSON.stringify(data.user));
   }
 
-  localStorage.setItem(
+  const storage = localStorage.getItem('insight_token') ? localStorage : sessionStorage;
+  storage.setItem(
     'insight_permissions',
     JSON.stringify(data?.permissions || [])
   );
 
-  localStorage.setItem(
+  storage.setItem(
     'insight_company_access',
     JSON.stringify(data?.company_access || {})
   );

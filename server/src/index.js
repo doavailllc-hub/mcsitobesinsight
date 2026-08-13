@@ -500,7 +500,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true, service: 'Insight MCSI
 
 app.post('/api/auth/login', safe(async (req, res) => {
   const { email, password } = req.body;
-  const rows = await q('SELECT * FROM users WHERE email=? AND status="active" LIMIT 1', [email]);
+  const rows = await q('SELECT * FROM users WHERE email=? AND status="active" LIMIT 1', [text(email).toLowerCase()]);
   const u = rows[0];
   if (!u || !await bcrypt.compare(password, u.password_hash))
     return res.status(401).json({ message: 'Invalid email or password' });
@@ -512,6 +512,29 @@ app.post('/api/auth/login', safe(async (req, res) => {
   );
 
   res.json({ token, user: { id: u.id, name: u.name, email: u.email, role: u.role } });
+}));
+
+app.post('/api/auth/register', safe(async (req, res) => {
+  const name = text(req.body?.name);
+  const email = text(req.body?.email).toLowerCase();
+  const password = String(req.body?.password || '');
+  if (name.length < 2) return res.status(400).json({ message: 'Enter your full name' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ message: 'Enter a valid business email' });
+  if (password.length < 8 || !/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/\d/.test(password)) {
+    return res.status(400).json({ message: 'Password must contain 8 characters, uppercase, lowercase and a number' });
+  }
+  const passwordHash = await bcrypt.hash(password, 12);
+  try {
+    const result = await q(
+      `INSERT INTO users (name,email,password_hash,role,status) VALUES (?,?,?,'viewer','inactive')`,
+      [name, email, passwordHash]
+    );
+    await q(`INSERT INTO audit_logs (user_id,action,entity_type,entity_name,ip_address) VALUES (NULL,?,?,?,?)`, ['Requested account access', 'user', email, req.ip]);
+    res.status(201).json({ id: result.insertId, message: 'Account request submitted for administrator approval.' });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'An account with this email already exists' });
+    throw err;
+  }
 }));
 
 app.use('/api', auth);

@@ -3,6 +3,7 @@ import { getPermissions, getUser } from './lib/api';
 
 import Layout from './components/Layout';
 import Login from './pages/Login';
+import CreateAccount from './pages/CreateAccount';
 import Dashboard from './pages/Dashboard';
 import Companies from './pages/Companies';
 import CompanyDetail from './pages/CompanyDetail';
@@ -148,6 +149,7 @@ export default function App() {
             : <Login />
         }
       />
+      <Route path="/create-account" element={getUser() ? <Navigate to="/" replace /> : <CreateAccount />} />
 
       <Route element={<Guard />}>
         <Route path="/" element={<HomeRoute />} />
