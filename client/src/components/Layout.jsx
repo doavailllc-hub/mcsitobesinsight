@@ -49,7 +49,7 @@ const sections = [
   {
     label: 'Finance',
     items: [
-      ['Finance', '/finance', Wallet, 'finance.view'],
+      ['Finance & Accounts', '/finance', Wallet, 'finance.view'],
       ['Bank Accounts', '/bank', Landmark, 'bank.view'],
       ['Payroll', '/payroll', BadgeIndianRupee, 'payroll.view']
     ]
@@ -109,10 +109,17 @@ export default function Layout() {
         setPermissions(data?.permissions || []);
       })
       .catch((err) => {
+        if (!active) return;
+
         if (err?.response?.status === 401) {
           clearSession();
-          nav('/login');
+          nav('/login', { replace: true });
+          return;
         }
+
+        // Keep the last locally stored access if refresh fails temporarily.
+        setUser(getUser());
+        setPermissions(getPermissions());
       })
       .finally(() => {
         if (active) setAccessLoading(false);
@@ -129,9 +136,19 @@ export default function Layout() {
     return sections
       .map((section) => ({
         ...section,
-        items: section.items.filter(([, , , permission]) =>
-          isGroupAdmin || permissions.includes(permission)
-        )
+        items: section.items.filter(([, path, , permission]) => {
+          if (isGroupAdmin) return true;
+
+          // A user with users.manage must also be able to reach Users & Access.
+          if (path === '/users') {
+            return (
+              permissions.includes('users.view') ||
+              permissions.includes('users.manage')
+            );
+          }
+
+          return permissions.includes(permission);
+        })
       }))
       .filter((section) => section.items.length > 0);
   }, [user, permissions]);
@@ -167,7 +184,17 @@ export default function Layout() {
         </button>
 
         <nav>
-          {!accessLoading &&
+          {accessLoading ? (
+            <div
+              style={{
+                padding: '14px 12px',
+                color: '#98a2b3',
+                fontSize: 12
+              }}
+            >
+              Loading access...
+            </div>
+          ) : (
             visibleSections.map((section) => (
               <div className="nav-section" key={section.label}>
                 <div className="nav-label">{section.label}</div>
@@ -186,7 +213,8 @@ export default function Layout() {
                   </NavLink>
                 ))}
               </div>
-            ))}
+            ))
+          )}
         </nav>
 
         <div className="sidebar-user">
@@ -200,7 +228,7 @@ export default function Layout() {
           <button
             onClick={() => {
               clearSession();
-              nav('/login');
+              nav('/login', { replace: true });
             }}
             title="Logout"
           >

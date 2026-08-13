@@ -85,6 +85,144 @@ const encryptSecret = value => {
   const tag = cipher.getAuthTag();
   return ['v1', iv.toString('base64'), tag.toString('base64'), encrypted.toString('base64')].join(':');
 };
+const calculateInvoiceTotals = (items = [], discountAmount = 0) => {
+  const cleanItems = (Array.isArray(items) ? items : [])
+    .filter(item => text(item?.item_name))
+    .map((item, index) => {
+      const quantity = Number(item.quantity || 0);
+      const unitPrice = Number(item.unit_price || 0);
+      const taxRate = Number(item.tax_rate || 0);
+
+      if (
+        !Number.isFinite(quantity) ||
+        quantity <= 0
+      ) {
+        const err = new Error(
+          `Invalid quantity for invoice item ${index + 1}`
+        );
+        err.statusCode = 400;
+        throw err;
+      }
+
+      if (
+        !Number.isFinite(unitPrice) ||
+        unitPrice < 0
+      ) {
+        const err = new Error(
+          `Invalid unit price for invoice item ${index + 1}`
+        );
+        err.statusCode = 400;
+        throw err;
+      }
+
+      if (
+        !Number.isFinite(taxRate) ||
+        taxRate < 0 ||
+        taxRate > 100
+      ) {
+        const err = new Error(
+          `Invalid tax rate for invoice item ${index + 1}`
+        );
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const lineSubtotal =
+        Number((quantity * unitPrice).toFixed(2));
+
+      const taxAmount =
+        Number(
+          (
+            lineSubtotal *
+            (taxRate / 100)
+          ).toFixed(2)
+        );
+
+      const lineTotal =
+        Number(
+          (
+            lineSubtotal +
+            taxAmount
+          ).toFixed(2)
+        );
+
+      return {
+        item_name: text(item.item_name),
+        description: text(item.description),
+        quantity,
+        unit_price: unitPrice,
+        line_subtotal: lineSubtotal,
+        tax_rate: taxRate,
+        tax_amount: taxAmount,
+        line_total: lineTotal,
+        sort_order: Number(item.sort_order || index)
+      };
+    });
+
+  if (!cleanItems.length) {
+    const err = new Error(
+      'At least one invoice item is required'
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const subtotal =
+    Number(
+      cleanItems
+        .reduce(
+          (sum, item) =>
+            sum + item.line_subtotal,
+          0
+        )
+        .toFixed(2)
+    );
+
+  const taxAmount =
+    Number(
+      cleanItems
+        .reduce(
+          (sum, item) =>
+            sum + item.tax_amount,
+          0
+        )
+        .toFixed(2)
+    );
+
+  const discount =
+    Number(discountAmount || 0);
+
+  if (
+    !Number.isFinite(discount) ||
+    discount < 0
+  ) {
+    const err = new Error(
+      'Invalid discount amount'
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const totalAmount =
+    Number(
+      Math.max(
+        0,
+        subtotal +
+          taxAmount -
+          discount
+      ).toFixed(2)
+    );
+
+  return {
+    items: cleanItems,
+    subtotal,
+    tax_amount: taxAmount,
+    discount_amount: discount,
+    total_amount: totalAmount
+  };
+};
+
+
 
 const allowedSettingKeys = new Set([
   'platform_name',
@@ -128,6 +266,88 @@ const decryptSecret = value => {
     decipher.final()
   ]).toString('utf8');
 };
+const loadFinanceForApproval = safe(async (req, res, next) => {
+  const financeId = Number(req.params.id);
+
+  if (!financeId) {
+    return res.status(400).json({
+      message: 'Invalid finance transaction.'
+    });
+  }
+
+  const [row] = await q(
+    `SELECT
+       id,
+       company_id,
+       date,
+       type,
+       category,
+       description,
+       amount,
+       currency,
+       approval_status,
+       created_by,
+       approved_by,
+       approved_at,
+       rejected_by,
+       rejected_at,
+       rejection_reason
+     FROM finance_transactions
+     WHERE id=?
+     LIMIT 1`,
+    [financeId]
+  );
+
+  if (!row) {
+    return res.status(404).json({
+      message: 'Finance transaction not found.'
+    });
+  }
+
+  req.financeRecord = row;
+  next();
+});
+
+
+
+const canApproveFinance = (access, companyId) => {
+  if (access?.globalRole === 'group_admin') return true;
+
+  const entry = access?.companyAccess?.[Number(companyId)];
+
+  if (!entry) return false;
+
+  const roleKey =
+    entry.role_key ||
+    entry.roleKey ||
+    entry.access_role ||
+    entry.role;
+
+  return roleKey === 'company_admin';
+};
+
+const requireFinanceApprovalAccess = safe(async (req, res, next) => {
+  const access = req.access || await buildUserAccess(req.user);
+  const companyId = Number(req.financeRecord?.company_id);
+
+  if (!companyId) {
+    return res.status(400).json({
+      message: 'Finance company could not be resolved.'
+    });
+  }
+
+  if (!canApproveFinance(access, companyId)) {
+    return res.status(403).json({
+      message:
+        'Only Company Admin or Group Admin can approve or reject finance transactions.'
+    });
+  }
+
+  req.access = access;
+  next();
+});
+
+
 
 const companyIdsFromAccess = access =>
   Object.keys(access?.companyAccess || {})
@@ -1033,6 +1253,36 @@ app.get('/api/employee-options', requireEffectivePermission('employees.view'), s
   );
 }));
 
+app.get('/api/payroll-employee-options', requireEffectivePermission('payroll.view'), safe(async (req, res) => {
+  const access = req.access || await buildUserAccess(req.user);
+
+  if (access.globalRole === 'group_admin') {
+    return res.json(await q(`
+      SELECT e.id,e.name,e.salary,e.company_id,c.name AS company_name
+      FROM employees e
+      JOIN companies c ON c.id=e.company_id
+      WHERE e.status='Active'
+      ORDER BY c.name,e.name
+    `));
+  }
+
+  const companyIds = companyIdsFromAccess(access).filter(companyId =>
+    hasEffectivePermission(access, 'payroll.view', companyId)
+  );
+
+  if (!companyIds.length) return res.json([]);
+  const placeholders = companyIds.map(() => '?').join(',');
+
+  res.json(await q(
+    `SELECT e.id,e.name,e.salary,e.company_id,c.name AS company_name
+     FROM employees e
+     JOIN companies c ON c.id=e.company_id
+     WHERE e.status='Active' AND e.company_id IN (${placeholders})
+     ORDER BY c.name,e.name`,
+    companyIds
+  ));
+}));
+
 // ---------- COMPANIES ----------
 
 app.get(
@@ -1448,14 +1698,46 @@ app.post(
   if (!Number.isFinite(Number(amount)) || Number(amount) < 0)
     return res.status(400).json({ message: 'Enter a valid amount' });
 
-  const result = await q(
+   const result = await q(
     `INSERT INTO finance_transactions
-     (company_id,date,type,category,description,amount,currency)
-     VALUES (?,?,?,?,?,?,?)`,
-    [company_id, date, type, text(category), text(description), Number(amount), currency || 'INR']
+     (
+       company_id,
+       date,
+       type,
+       category,
+       description,
+       amount,
+       currency,
+       approval_status,
+       created_by
+     )
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    [
+      company_id,
+      date,
+      type,
+      text(category),
+      text(description),
+      Number(amount),
+      currency || 'INR',
+      'pending',
+      req.user?.id || null
+    ]
   );
-  await audit(req, 'Created finance transaction', 'finance', text(description) || text(category) || `Transaction #${result.insertId}`);
-  res.status(201).json({ id: result.insertId });
+
+   await audit(
+    req,
+    'Created finance transaction - pending approval',
+    'finance',
+    text(description) ||
+      text(category) ||
+      `Transaction #${result.insertId}`
+  );
+
+  res.status(201).json({
+    id: result.insertId,
+    approval_status: 'pending'
+  });
 }));
 
 app.post('/api/people', requireEffectivePermission('people.manage'), requireBodyCompanyAccess('people.manage','primary_company_id'), safe(async (req, res) => {
@@ -2246,23 +2528,65 @@ app.get(
     const id = Number(req.params.id);
 
     const [row] = await q(
-      `SELECT f.id,f.company_id,
-              DATE_FORMAT(f.date,'%Y-%m-%d') date,
-              f.type,f.category,f.description,f.amount,f.currency,
-              c.name company_name
+      `SELECT
+         f.id,
+         f.company_id,
+         DATE_FORMAT(f.date,'%Y-%m-%d') date,
+         f.type,
+         f.category,
+         f.description,
+         f.amount,
+         f.currency,
+
+         f.approval_status,
+         f.created_by,
+         creator.name AS created_by_name,
+
+         f.approved_by,
+         approver.name AS approved_by_name,
+         DATE_FORMAT(f.approved_at,'%Y-%m-%d %H:%i') approved_at,
+
+         f.rejected_by,
+         rejector.name AS rejected_by_name,
+         DATE_FORMAT(f.rejected_at,'%Y-%m-%d %H:%i') rejected_at,
+         f.rejection_reason,
+
+         c.name company_name
+
        FROM finance_transactions f
-       JOIN companies c ON c.id=f.company_id
+
+       JOIN companies c
+         ON c.id=f.company_id
+
+       LEFT JOIN users creator
+         ON creator.id=f.created_by
+
+       LEFT JOIN users approver
+         ON approver.id=f.approved_by
+
+       LEFT JOIN users rejector
+         ON rejector.id=f.rejected_by
+
        WHERE f.id=?`,
       [id]
     );
 
     if (!row) {
-      return res.status(404).json({ message: 'Finance record not found' });
+      return res.status(404).json({
+        message: 'Finance record not found'
+      });
     }
 
-    const access = req.access || await buildUserAccess(req.user);
+    const access =
+      req.access || await buildUserAccess(req.user);
 
-    if (!hasEffectivePermission(access, 'finance.view', row.company_id)) {
+    if (
+      !hasEffectivePermission(
+        access,
+        'finance.view',
+        row.company_id
+      )
+    ) {
       return res.status(403).json({
         message: 'You do not have access to this company.'
       });
@@ -2271,23 +2595,38 @@ app.get(
     res.json(row);
   })
 );
-
 app.put(
   '/api/finance/:id',
   requireEffectivePermission('finance.edit'),
   safe(async (req, res) => {
     const id = Number(req.params.id);
 
-    const [existing] = await q(
-      `SELECT id,company_id,description,category
+     const [existing] = await q(
+      `SELECT
+         id,
+         company_id,
+         description,
+         category,
+         approval_status
        FROM finance_transactions
        WHERE id=?`,
       [id]
     );
 
+
+ 
     if (!existing) {
-      return res.status(404).json({ message: 'Finance record not found' });
+      return res.status(404).json({
+        message: 'Finance record not found'
+      });
     }
+ if (existing.approval_status === 'approved') {
+      return res.status(409).json({
+        message:
+          'Approved finance transactions are locked and cannot be edited.'
+      });
+    }
+
 
     const access = req.access || await buildUserAccess(req.user);
 
@@ -2368,37 +2707,62 @@ app.delete(
     const id = Number(req.params.id);
 
     const [existing] = await q(
-      `SELECT id,company_id,description,category
+      `SELECT
+         id,
+         company_id,
+         description,
+         category,
+         approval_status
        FROM finance_transactions
        WHERE id=?`,
       [id]
     );
 
     if (!existing) {
-      return res.status(404).json({ message: 'Finance record not found' });
+      return res.status(404).json({
+        message: 'Finance record not found'
+      });
     }
 
-    const access = req.access || await buildUserAccess(req.user);
+    const access =
+      req.access || await buildUserAccess(req.user);
 
-    if (!hasEffectivePermission(access, 'finance.delete', existing.company_id)) {
+    if (
+      !hasEffectivePermission(
+        access,
+        'finance.delete',
+        existing.company_id
+      )
+    ) {
       return res.status(403).json({
         message: 'You do not have access to this company.'
       });
     }
 
-    await q('DELETE FROM finance_transactions WHERE id=?', [id]);
+    if (existing.approval_status === 'approved') {
+      return res.status(409).json({
+        message:
+          'Approved finance transactions are locked and cannot be deleted.'
+      });
+    }
+
+    await q(
+      'DELETE FROM finance_transactions WHERE id=?',
+      [id]
+    );
 
     await audit(
       req,
       'Deleted finance transaction',
       'finance',
-      existing.description || existing.category || `Finance #${id}`
+      existing.description ||
+        existing.category ||
+        `Finance #${id}`
     );
 
     res.json({ ok: true });
   })
 );
-
 // ---------- GENERIC SECURE MODULE CRUD ----------
 
 for (const [path, cfg] of Object.entries(crud)) {
@@ -2805,16 +3169,17 @@ const secureLists = {
     sql: `SELECT e.id,e.company_id,e.employee_code,e.name,
                  c.name company_name,e.designation,
                  DATE_FORMAT(e.joining_date,'%Y-%m-%d') joining_date,
-                 e.salary
+                 e.salary,e.phone,e.email,e.status
           FROM employees e
           JOIN companies c ON c.id=e.company_id`
   },
   payroll: {
     permission: 'payroll.view',
     companyColumn: 'e.company_id',
-    sql: `SELECT p.id,e.company_id,p.month,e.name employee_name,
-                 c.name company_name,p.gross_salary,p.deduction,
-                 p.net_salary,p.status
+    sql: `SELECT p.id,p.employee_id,e.company_id,p.month,e.name employee_name,
+                 e.employee_code,e.designation,c.name company_name,
+                 p.gross_salary,p.deduction,p.net_salary,p.status,
+                 DATE_FORMAT(p.paid_date,'%Y-%m-%d') paid_date
           FROM payroll p
           JOIN employees e ON e.id=p.employee_id
           JOIN companies c ON c.id=e.company_id`
@@ -3047,6 +3412,2014 @@ app.use((err, req, res, next) => {
         : undefined
   });
 });
+app.get(
+  '/api/finance/invoice-settings/:companyId',
+  requireEffectivePermission('finance.view'),
+  safe(async (req, res) => {
+    const companyId = Number(req.params.companyId);
+    const access = req.access || await buildUserAccess(req.user);
+
+    if (!hasEffectivePermission(access, 'finance.view', companyId)) {
+      return res.status(403).json({
+        message: 'You do not have access to this company.'
+      });
+    }
+
+    const [company] = await q(
+      `SELECT id,name,legal_name,country
+       FROM companies
+       WHERE id=?
+       LIMIT 1`,
+      [companyId]
+    );
+
+    if (!company) {
+      return res.status(404).json({ message: 'Company not found.' });
+    }
+
+    const [settings] = await q(
+      `SELECT *
+       FROM finance_invoice_settings
+       WHERE company_id=?
+       LIMIT 1`,
+      [companyId]
+    );
+
+    res.json({
+      company,
+      settings: settings || {
+        company_id: companyId,
+        invoice_prefix: 'INV',
+        logo_url: '',
+        company_address: '',
+        tax_label: '',
+        tax_number: '',
+        payment_terms: '',
+        payment_instructions: '',
+        bank_name: '',
+        bank_account_name: '',
+        bank_account_number: '',
+        bank_iban: '',
+        bank_swift: '',
+        authorized_signatory: '',
+        signature_note: '',
+        footer_note: ''
+      }
+    });
+  })
+);
+app.put(
+  '/api/finance/invoice-settings/:companyId',
+  requireEffectivePermission('finance.edit'),
+  safe(async (req, res) => {
+    const companyId = Number(req.params.companyId);
+    const access = req.access || await buildUserAccess(req.user);
+
+    if (!hasEffectivePermission(access, 'finance.edit', companyId)) {
+      return res.status(403).json({
+        message: 'You do not have access to this company.'
+      });
+    }
+
+    const {
+      invoice_prefix='INV',
+      logo_url,
+      company_address,
+      tax_label,
+      tax_number,
+      payment_terms,
+      payment_instructions,
+      bank_name,
+      bank_account_name,
+      bank_account_number,
+      bank_iban,
+      bank_swift,
+      authorized_signatory,
+      signature_note,
+      footer_note
+    } = req.body;
+
+    const cleanPrefix =
+      text(invoice_prefix || 'INV')
+        .toUpperCase()
+        .replace(/[^A-Z0-9_-]/g, '')
+        .slice(0, 30) || 'INV';
+
+    await q(
+      `INSERT INTO finance_invoice_settings
+       (
+         company_id,invoice_prefix,logo_url,company_address,
+         tax_label,tax_number,payment_terms,payment_instructions,
+         bank_name,bank_account_name,bank_account_number,
+         bank_iban,bank_swift,authorized_signatory,
+         signature_note,footer_note
+       )
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+       ON DUPLICATE KEY UPDATE
+         invoice_prefix=VALUES(invoice_prefix),
+         logo_url=VALUES(logo_url),
+         company_address=VALUES(company_address),
+         tax_label=VALUES(tax_label),
+         tax_number=VALUES(tax_number),
+         payment_terms=VALUES(payment_terms),
+         payment_instructions=VALUES(payment_instructions),
+         bank_name=VALUES(bank_name),
+         bank_account_name=VALUES(bank_account_name),
+         bank_account_number=VALUES(bank_account_number),
+         bank_iban=VALUES(bank_iban),
+         bank_swift=VALUES(bank_swift),
+         authorized_signatory=VALUES(authorized_signatory),
+         signature_note=VALUES(signature_note),
+         footer_note=VALUES(footer_note)`,
+      [
+        companyId,
+        cleanPrefix,
+        text(logo_url),
+        text(company_address),
+        text(tax_label),
+        text(tax_number),
+        text(payment_terms),
+        text(payment_instructions),
+        text(bank_name),
+        text(bank_account_name),
+        text(bank_account_number),
+        text(bank_iban),
+        text(bank_swift),
+        text(authorized_signatory),
+        text(signature_note),
+        text(footer_note)
+      ]
+    );
+
+    await audit(
+      req,
+      'Updated invoice settings',
+      'finance_invoice_settings',
+      `Company #${companyId}`
+    );
+
+    res.json({ ok: true });
+  })
+);
+
+
+app.put(
+  '/api/finance/:id/approve',
+  requireEffectivePermission('finance.view'),
+  loadFinanceForApproval,
+  requireFinanceApprovalAccess,
+  safe(async (req, res) => {
+    const row = req.financeRecord;
+
+    if (row.approval_status === 'approved') {
+      return res.status(409).json({
+        message: 'This transaction is already approved.'
+      });
+    }
+
+    if (row.approval_status === 'rejected') {
+      return res.status(409).json({
+        message:
+          'Rejected transactions must be corrected and resubmitted before approval.'
+      });
+    }
+
+    await q(
+      `UPDATE finance_transactions
+       SET
+         approval_status='approved',
+         approved_by=?,
+         approved_at=NOW(),
+         rejected_by=NULL,
+         rejected_at=NULL,
+         rejection_reason=NULL
+       WHERE id=?`,
+      [
+        req.user?.id || null,
+        row.id
+      ]
+    );
+
+    await audit(
+      req,
+      'Approved finance transaction',
+      'finance',
+      row.description ||
+        row.category ||
+        `Transaction #${row.id}`
+    );
+
+    res.json({
+      ok: true,
+      approval_status: 'approved'
+    });
+  })
+);
+
+
+
+app.put(
+  '/api/finance/:id/reject',
+  requireEffectivePermission('finance.view'),
+  loadFinanceForApproval,
+  requireFinanceApprovalAccess,
+  safe(async (req, res) => {
+    const row = req.financeRecord;
+    const reason = text(req.body?.reason);
+
+    if (!reason) {
+      return res.status(400).json({
+        message: 'Rejection reason is required.'
+      });
+    }
+
+    if (reason.length > 500) {
+      return res.status(400).json({
+        message:
+          'Rejection reason must be 500 characters or less.'
+      });
+    }
+
+    if (row.approval_status === 'approved') {
+      return res.status(409).json({
+        message:
+          'Approved transactions cannot be rejected.'
+      });
+    }
+
+    await q(
+      `UPDATE finance_transactions
+       SET
+         approval_status='rejected',
+         rejected_by=?,
+         rejected_at=NOW(),
+         rejection_reason=?,
+         approved_by=NULL,
+         approved_at=NULL
+       WHERE id=?`,
+      [
+        req.user?.id || null,
+        reason,
+        row.id
+      ]
+    );
+
+    await audit(
+      req,
+      'Rejected finance transaction',
+      'finance',
+      row.description ||
+        row.category ||
+        `Transaction #${row.id}`
+    );
+
+    res.json({
+      ok: true,
+      approval_status: 'rejected'
+    });
+  })
+);
+
+
+app.put(
+  '/api/finance/:id/resubmit',
+  requireEffectivePermission('finance.edit'),
+  safe(async (req, res) => {
+    const financeId = Number(req.params.id);
+
+    const [row] = await q(
+      `SELECT
+         id,
+         company_id,
+         approval_status,
+         description,
+         category
+       FROM finance_transactions
+       WHERE id=?
+       LIMIT 1`,
+      [financeId]
+    );
+
+    if (!row) {
+      return res.status(404).json({
+        message: 'Finance transaction not found.'
+      });
+    }
+
+    const access =
+      req.access || await buildUserAccess(req.user);
+
+    if (
+      !hasEffectivePermission(
+        access,
+        'finance.edit',
+        row.company_id
+      )
+    ) {
+      return res.status(403).json({
+        message:
+          'You do not have access to this company.'
+      });
+    }
+
+    if (row.approval_status !== 'rejected') {
+      return res.status(409).json({
+        message:
+          'Only rejected transactions can be resubmitted.'
+      });
+    }
+
+    await q(
+      `UPDATE finance_transactions
+       SET
+         approval_status='pending',
+         approved_by=NULL,
+         approved_at=NULL,
+         rejected_by=NULL,
+         rejected_at=NULL,
+         rejection_reason=NULL
+       WHERE id=?`,
+      [financeId]
+    );
+
+    await audit(
+      req,
+      'Resubmitted finance transaction for approval',
+      'finance',
+      row.description ||
+        row.category ||
+        `Transaction #${row.id}`
+    );
+
+    res.json({
+      ok: true,
+      approval_status: 'pending'
+    });
+  })
+);
+
+app.get(
+  '/api/finance-approvals/pending',
+  requireEffectivePermission('finance.view'),
+  safe(async (req, res) => {
+    const access =
+      req.access || await buildUserAccess(req.user);
+
+    if (access.globalRole === 'group_admin') {
+      return res.json(
+        await q(
+          `SELECT
+             f.id,
+             f.company_id,
+             c.name company_name,
+             DATE_FORMAT(f.date,'%Y-%m-%d') date,
+             f.type,
+             f.category,
+             f.description,
+             f.amount,
+             f.currency,
+             f.approval_status,
+             u.name created_by_name
+           FROM finance_transactions f
+           JOIN companies c
+             ON c.id=f.company_id
+           LEFT JOIN users u
+             ON u.id=f.created_by
+           WHERE f.approval_status='pending'
+           ORDER BY f.id DESC`
+        )
+      );
+    }
+
+    const companyIds =
+      companyIdsFromAccess(access)
+        .filter(companyId =>
+          canApproveFinance(access, companyId)
+        );
+
+    if (!companyIds.length) {
+      return res.json([]);
+    }
+
+    const placeholders =
+      companyIds.map(() => '?').join(',');
+
+    res.json(
+      await q(
+        `SELECT
+           f.id,
+           f.company_id,
+           c.name company_name,
+           DATE_FORMAT(f.date,'%Y-%m-%d') date,
+           f.type,
+           f.category,
+           f.description,
+           f.amount,
+           f.currency,
+           f.approval_status,
+           u.name created_by_name
+         FROM finance_transactions f
+         JOIN companies c
+           ON c.id=f.company_id
+         LEFT JOIN users u
+           ON u.id=f.created_by
+         WHERE f.approval_status='pending'
+           AND f.company_id IN (${placeholders})
+         ORDER BY f.id DESC`,
+        companyIds
+      )
+    );
+  })
+);
+
+app.get(
+  '/api/sales-invoices',
+  requireEffectivePermission('finance.view'),
+  safe(async (req, res) => {
+    const access =
+      req.access ||
+      await buildUserAccess(req.user);
+
+    const baseSql = `
+      SELECT
+        si.id,
+        si.company_id,
+        si.invoice_number,
+        c.name company_name,
+
+        si.customer_name,
+        si.customer_email,
+
+        DATE_FORMAT(
+          si.invoice_date,
+          '%Y-%m-%d'
+        ) invoice_date,
+
+        DATE_FORMAT(
+          si.due_date,
+          '%Y-%m-%d'
+        ) due_date,
+
+        si.currency,
+        si.subtotal,
+        si.tax_amount,
+        si.discount_amount,
+        si.total_amount,
+        si.paid_amount,
+        si.balance_amount,
+        si.status,
+
+        CASE
+          WHEN
+            si.status IN (
+              'issued',
+              'partially_paid'
+            )
+            AND si.balance_amount > 0
+            AND si.due_date IS NOT NULL
+            AND si.due_date < CURDATE()
+            THEN 'overdue'
+          ELSE si.status
+        END display_status,
+
+        u.name created_by_name,
+
+        DATE_FORMAT(
+          si.created_at,
+          '%Y-%m-%d %H:%i'
+        ) created_at
+
+      FROM sales_invoices si
+
+      JOIN companies c
+        ON c.id=si.company_id
+
+      LEFT JOIN users u
+        ON u.id=si.created_by
+    `;
+
+    if (
+      access.globalRole ===
+      'group_admin'
+    ) {
+      return res.json(
+        await q(
+          `${baseSql}
+           ORDER BY si.id DESC`
+        )
+      );
+    }
+
+    const companyIds =
+      companyIdsFromAccess(access)
+        .filter(companyId =>
+          hasEffectivePermission(
+            access,
+            'finance.view',
+            companyId
+          )
+        );
+
+    if (!companyIds.length) {
+      return res.json([]);
+    }
+
+    const placeholders =
+      companyIds
+        .map(() => '?')
+        .join(',');
+
+    res.json(
+      await q(
+        `${baseSql}
+         WHERE si.company_id
+           IN (${placeholders})
+         ORDER BY si.id DESC`,
+        companyIds
+      )
+    );
+  })
+);
+
+
+
+
+app.get(
+  '/api/sales-invoices/:id',
+  requireEffectivePermission('finance.view'),
+  safe(async (req, res) => {
+    const invoiceId =
+      Number(req.params.id);
+const [invoiceSettings] = await q(
+  `SELECT *
+   FROM finance_invoice_settings
+   WHERE company_id=?
+   LIMIT 1`,
+  [invoice.company_id]
+);
+
+Return:
+
+res.json({
+  invoice,
+  items,
+  payments,
+  invoice_settings: invoiceSettings || null
+});
+    const [invoice] = await q(
+      `SELECT
+         si.*,
+         c.name company_name,
+
+         creator.name created_by_name,
+         issuer.name issued_by_name,
+
+         DATE_FORMAT(
+           si.invoice_date,
+           '%Y-%m-%d'
+         ) invoice_date,
+
+         DATE_FORMAT(
+           si.due_date,
+           '%Y-%m-%d'
+         ) due_date,
+
+         DATE_FORMAT(
+           si.issued_at,
+           '%Y-%m-%d %H:%i'
+         ) issued_at
+
+       FROM sales_invoices si
+
+       JOIN companies c
+         ON c.id=si.company_id
+
+       LEFT JOIN users creator
+         ON creator.id=si.created_by
+
+       LEFT JOIN users issuer
+         ON issuer.id=si.issued_by
+
+       WHERE si.id=?
+       LIMIT 1`,
+      [invoiceId]
+    );
+
+    if (!invoice) {
+      return res.status(404).json({
+        message:
+          'Sales invoice not found.'
+      });
+    }
+
+    const access =
+      req.access ||
+      await buildUserAccess(req.user);
+
+    if (
+      !hasEffectivePermission(
+        access,
+        'finance.view',
+        invoice.company_id
+      )
+    ) {
+      return res.status(403).json({
+        message:
+          'You do not have access to this company.'
+      });
+    }
+
+    const items = await q(
+      `SELECT
+         id,
+         item_name,
+         description,
+         quantity,
+         unit_price,
+         line_subtotal,
+         tax_rate,
+         tax_amount,
+         line_total,
+         sort_order
+       FROM sales_invoice_items
+       WHERE invoice_id=?
+       ORDER BY sort_order,id`,
+      [invoiceId]
+    );
+
+    const payments = await q(
+      `SELECT
+         p.id,
+         DATE_FORMAT(
+           p.payment_date,
+           '%Y-%m-%d'
+         ) payment_date,
+         p.amount,
+         p.currency,
+         p.payment_method,
+         p.reference_number,
+         p.notes,
+         u.name received_by_name
+       FROM customer_payments p
+       LEFT JOIN users u
+         ON u.id=p.received_by
+       WHERE p.invoice_id=?
+       ORDER BY p.payment_date DESC,p.id DESC`,
+      [invoiceId]
+    );
+
+    res.json({
+      invoice,
+      items,
+      payments
+    });
+  })
+);
+
+
+
+app.post(
+  '/api/sales-invoices',
+  requireEffectivePermission(
+    'finance.create'
+  ),
+  requireBodyCompanyAccess(
+    'finance.create'
+  ),
+  safe(async (req, res) => {
+    const {
+      company_id,
+      customer_name,
+      customer_email,
+      customer_phone,
+      customer_address,
+      customer_tax_number,
+      invoice_date,
+      due_date,
+      currency = 'INR',
+      discount_amount = 0,
+      notes,
+      terms,
+      items = []
+    } = req.body;
+
+    if (!company_id) {
+      return res.status(400).json({
+        message: 'Company is required.'
+      });
+    }
+
+    if (!text(customer_name)) {
+      return res.status(400).json({
+        message:
+          'Customer name is required.'
+      });
+    }
+
+    if (!invoice_date) {
+      return res.status(400).json({
+        message:
+          'Invoice date is required.'
+      });
+    }
+
+    const calculated =
+      calculateInvoiceTotals(
+        items,
+        discount_amount
+      );
+
+    const conn =
+      await pool.getConnection();
+
+    try {
+      await conn.beginTransaction();
+
+      const [result] =
+        await conn.query(
+          `INSERT INTO sales_invoices
+           (
+             company_id,
+             customer_name,
+             customer_email,
+             customer_phone,
+             customer_address,
+             customer_tax_number,
+             invoice_date,
+             due_date,
+             currency,
+             subtotal,
+             tax_rate,
+             tax_amount,
+             discount_amount,
+             total_amount,
+             paid_amount,
+             balance_amount,
+             status,
+             notes,
+             terms,
+             created_by
+           )
+           VALUES
+           (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [
+            company_id,
+            text(customer_name),
+            text(customer_email),
+            text(customer_phone),
+            text(customer_address),
+            text(customer_tax_number),
+
+            invoice_date,
+            nullable(due_date),
+
+            currency || 'INR',
+
+            calculated.subtotal,
+
+            0,
+
+            calculated.tax_amount,
+            calculated.discount_amount,
+            calculated.total_amount,
+
+            0,
+            calculated.total_amount,
+
+            'draft',
+
+            text(notes),
+            text(terms),
+
+            req.user?.id || null
+          ]
+        );
+
+      const invoiceId =
+        result.insertId;
+
+      // Load company invoice prefix
+      const [settingsRows] =
+        await conn.query(
+          `SELECT invoice_prefix
+           FROM finance_invoice_settings
+           WHERE company_id=?
+           LIMIT 1`,
+          [company_id]
+        );
+
+      const prefix =
+        settingsRows[0]
+          ?.invoice_prefix ||
+        'INV';
+
+      const invoiceYear =
+        String(invoice_date)
+          .slice(0, 4);
+
+      const invoiceNumber =
+        `${prefix}-${invoiceYear}-${String(
+          invoiceId
+        ).padStart(5, '0')}`;
+
+      await conn.query(
+        `UPDATE sales_invoices
+         SET invoice_number=?
+         WHERE id=?`,
+        [
+          invoiceNumber,
+          invoiceId
+        ]
+      );
+
+      for (
+        const item
+        of calculated.items
+      ) {
+        await conn.query(
+          `INSERT INTO sales_invoice_items
+           (
+             invoice_id,
+             item_name,
+             description,
+             quantity,
+             unit_price,
+             line_subtotal,
+             tax_rate,
+             tax_amount,
+             line_total,
+             sort_order
+           )
+           VALUES
+           (?,?,?,?,?,?,?,?,?,?)`,
+          [
+            invoiceId,
+            item.item_name,
+            item.description,
+            item.quantity,
+            item.unit_price,
+            item.line_subtotal,
+            item.tax_rate,
+            item.tax_amount,
+            item.line_total,
+            item.sort_order
+          ]
+        );
+      }
+
+      await conn.query(
+        `INSERT INTO audit_logs
+         (
+           user_id,
+           action,
+           entity_type,
+           entity_name,
+           ip_address
+         )
+         VALUES (?,?,?,?,?)`,
+        [
+          req.user?.id || null,
+          'Created sales invoice',
+          'sales_invoice',
+          invoiceNumber,
+          req.ip
+        ]
+      );
+
+      await conn.commit();
+
+      res.status(201).json({
+        id: invoiceId,
+        invoice_number:
+          invoiceNumber,
+        status: 'draft'
+      });
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  })
+);
+
+
+
+app.put(
+  '/api/sales-invoices/:id',
+  requireEffectivePermission(
+    'finance.edit'
+  ),
+  safe(async (req, res) => {
+    const invoiceId =
+      Number(req.params.id);
+
+    const [existing] = await q(
+      `SELECT
+         id,
+         company_id,
+         invoice_number,
+         status
+       FROM sales_invoices
+       WHERE id=?
+       LIMIT 1`,
+      [invoiceId]
+    );
+
+    if (!existing) {
+      return res.status(404).json({
+        message:
+          'Sales invoice not found.'
+      });
+    }
+
+    if (
+      existing.status !== 'draft'
+    ) {
+      return res.status(409).json({
+        message:
+          'Only draft invoices can be edited.'
+      });
+    }
+
+    const access =
+      req.access ||
+      await buildUserAccess(req.user);
+
+    if (
+      !hasEffectivePermission(
+        access,
+        'finance.edit',
+        existing.company_id
+      )
+    ) {
+      return res.status(403).json({
+        message:
+          'You do not have access to this company.'
+      });
+    }
+
+    const {
+      customer_name,
+      customer_email,
+      customer_phone,
+      customer_address,
+      invoice_date,
+      due_date,
+      currency='INR',
+      discount_amount=0,
+      notes,
+      terms,
+      items=[]
+    } = req.body;
+
+    if (!text(customer_name)) {
+      return res.status(400).json({
+        message:
+          'Customer name is required.'
+      });
+    }
+
+    if (!invoice_date) {
+      return res.status(400).json({
+        message:
+          'Invoice date is required.'
+      });
+    }
+
+    const calculated =
+      calculateInvoiceTotals(
+        items,
+        discount_amount
+      );
+
+    const conn =
+      await pool.getConnection();
+
+    try {
+      await conn.beginTransaction();
+
+      await conn.query(
+        `UPDATE sales_invoices
+         SET
+           customer_name=?,
+           customer_email=?,
+           customer_phone=?,
+           customer_address=?,
+           invoice_date=?,
+           due_date=?,
+           currency=?,
+           subtotal=?,
+           tax_rate=?,
+           tax_amount=?,
+           discount_amount=?,
+           total_amount=?,
+           balance_amount=?,
+           notes=?,
+           terms=?
+         WHERE id=?`,
+        [
+          text(customer_name),
+          text(customer_email),
+          text(customer_phone),
+          text(customer_address),
+          invoice_date,
+          nullable(due_date),
+          currency || 'INR',
+          calculated.subtotal,
+          0,
+          calculated.tax_amount,
+          calculated.discount_amount,
+          calculated.total_amount,
+          calculated.total_amount,
+          text(notes),
+          text(terms),
+          invoiceId
+        ]
+      );
+
+      await conn.query(
+        `DELETE FROM
+         sales_invoice_items
+         WHERE invoice_id=?`,
+        [invoiceId]
+      );
+
+      for (
+        const item
+        of calculated.items
+      ) {
+        await conn.query(
+          `INSERT INTO sales_invoice_items
+           (
+             invoice_id,
+             item_name,
+             description,
+             quantity,
+             unit_price,
+             line_subtotal,
+             tax_rate,
+             tax_amount,
+             line_total,
+             sort_order
+           )
+           VALUES
+           (?,?,?,?,?,?,?,?,?,?)`,
+          [
+            invoiceId,
+            item.item_name,
+            item.description,
+            item.quantity,
+            item.unit_price,
+            item.line_subtotal,
+            item.tax_rate,
+            item.tax_amount,
+            item.line_total,
+            item.sort_order
+          ]
+        );
+      }
+
+      await conn.query(
+        `INSERT INTO audit_logs
+         (
+           user_id,
+           action,
+           entity_type,
+           entity_name,
+           ip_address
+         )
+         VALUES (?,?,?,?,?)`,
+        [
+          req.user?.id || null,
+          'Updated sales invoice',
+          'sales_invoice',
+          existing.invoice_number,
+          req.ip
+        ]
+      );
+
+      await conn.commit();
+
+      res.json({ ok: true });
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  })
+);
+
+
+
+
+app.put(
+  '/api/sales-invoices/:id/issue',
+  requireEffectivePermission(
+    'finance.edit'
+  ),
+  safe(async (req, res) => {
+    const invoiceId =
+      Number(req.params.id);
+
+    const [invoice] = await q(
+      `SELECT
+         id,
+         company_id,
+         invoice_number,
+         total_amount,
+         status
+       FROM sales_invoices
+       WHERE id=?
+       LIMIT 1`,
+      [invoiceId]
+    );
+
+    if (!invoice) {
+      return res.status(404).json({
+        message:
+          'Sales invoice not found.'
+      });
+    }
+
+    const access =
+      req.access ||
+      await buildUserAccess(req.user);
+
+    if (
+      !hasEffectivePermission(
+        access,
+        'finance.edit',
+        invoice.company_id
+      )
+    ) {
+      return res.status(403).json({
+        message:
+          'You do not have access to this company.'
+      });
+    }
+
+    if (
+      invoice.status !== 'draft'
+    ) {
+      return res.status(409).json({
+        message:
+          'Only draft invoices can be issued.'
+      });
+    }
+
+    if (
+      Number(invoice.total_amount) <= 0
+    ) {
+      return res.status(400).json({
+        message:
+          'Invoice total must be greater than zero.'
+      });
+    }
+
+    await q(
+      `UPDATE sales_invoices
+       SET
+         status='issued',
+         issued_by=?,
+         issued_at=NOW()
+       WHERE id=?`,
+      [
+        req.user?.id || null,
+        invoiceId
+      ]
+    );
+
+    await audit(
+      req,
+      'Issued sales invoice',
+      'sales_invoice',
+      invoice.invoice_number
+    );
+
+    res.json({
+      ok: true,
+      status: 'issued'
+    });
+  })
+);
+
+
+
+
+app.put(
+  '/api/sales-invoices/:id/cancel',
+  requireEffectivePermission(
+    'finance.edit'
+  ),
+  safe(async (req, res) => {
+    const invoiceId =
+      Number(req.params.id);
+
+    const [invoice] = await q(
+      `SELECT
+         id,
+         company_id,
+         invoice_number,
+         status,
+         paid_amount
+       FROM sales_invoices
+       WHERE id=?
+       LIMIT 1`,
+      [invoiceId]
+    );
+
+    if (!invoice) {
+      return res.status(404).json({
+        message:
+          'Sales invoice not found.'
+      });
+    }
+
+    const access =
+      req.access ||
+      await buildUserAccess(req.user);
+
+    if (
+      !hasEffectivePermission(
+        access,
+        'finance.edit',
+        invoice.company_id
+      )
+    ) {
+      return res.status(403).json({
+        message:
+          'You do not have access to this company.'
+      });
+    }
+
+    if (
+      Number(invoice.paid_amount) > 0
+    ) {
+      return res.status(409).json({
+        message:
+          'Invoices with recorded payments cannot be cancelled.'
+      });
+    }
+
+    if (
+      invoice.status === 'paid'
+    ) {
+      return res.status(409).json({
+        message:
+          'Paid invoices cannot be cancelled.'
+      });
+    }
+
+    await q(
+      `UPDATE sales_invoices
+       SET status='cancelled'
+       WHERE id=?`,
+      [invoiceId]
+    );
+
+    await audit(
+      req,
+      'Cancelled sales invoice',
+      'sales_invoice',
+      invoice.invoice_number
+    );
+
+    res.json({
+      ok: true,
+      status: 'cancelled'
+    });
+  })
+);
+
+
+
+app.get(
+  '/api/finance/receivables',
+  requireEffectivePermission(
+    'finance.view'
+  ),
+  safe(async (req, res) => {
+    const access =
+      req.access ||
+      await buildUserAccess(req.user);
+
+    const baseSql = `
+      SELECT
+        r.invoice_id,
+        r.company_id,
+        c.name company_name,
+
+        r.invoice_number,
+        r.customer_name,
+
+        DATE_FORMAT(
+          r.invoice_date,
+          '%Y-%m-%d'
+        ) invoice_date,
+
+        DATE_FORMAT(
+          r.due_date,
+          '%Y-%m-%d'
+        ) due_date,
+
+        r.currency,
+        r.total_amount,
+        r.paid_amount,
+        r.balance_amount,
+        r.receivable_status,
+        r.days_overdue
+
+      FROM finance_receivables r
+
+      JOIN companies c
+        ON c.id=r.company_id
+    `;
+
+    if (
+      access.globalRole ===
+      'group_admin'
+    ) {
+      return res.json(
+        await q(
+          `${baseSql}
+           ORDER BY
+             r.days_overdue DESC,
+             r.due_date`
+        )
+      );
+    }
+
+    const companyIds =
+      companyIdsFromAccess(access)
+        .filter(companyId =>
+          hasEffectivePermission(
+            access,
+            'finance.view',
+            companyId
+          )
+        );
+
+    if (!companyIds.length) {
+      return res.json([]);
+    }
+
+    const placeholders =
+      companyIds
+        .map(() => '?')
+        .join(',');
+
+    res.json(
+      await q(
+        `${baseSql}
+         WHERE r.company_id
+           IN (${placeholders})
+         ORDER BY
+           r.days_overdue DESC,
+           r.due_date`,
+        companyIds
+      )
+    );
+  })
+);
+
+
+
+
+app.get(
+  '/api/customer-payments',
+  requireEffectivePermission(
+    'finance.view'
+  ),
+  safe(async (req, res) => {
+    const access =
+      req.access ||
+      await buildUserAccess(req.user);
+
+    const baseSql = `
+      SELECT
+        p.id,
+        p.company_id,
+        c.name company_name,
+
+        p.invoice_id,
+        si.invoice_number,
+        si.customer_name,
+
+        DATE_FORMAT(
+          p.payment_date,
+          '%Y-%m-%d'
+        ) payment_date,
+
+        p.amount,
+        p.currency,
+        p.payment_method,
+        p.reference_number,
+        p.notes,
+
+        u.name received_by_name
+
+      FROM customer_payments p
+
+      JOIN companies c
+        ON c.id=p.company_id
+
+      LEFT JOIN sales_invoices si
+        ON si.id=p.invoice_id
+
+      LEFT JOIN users u
+        ON u.id=p.received_by
+    `;
+
+    if (
+      access.globalRole ===
+      'group_admin'
+    ) {
+      return res.json(
+        await q(
+          `${baseSql}
+           ORDER BY
+             p.payment_date DESC,
+             p.id DESC`
+        )
+      );
+    }
+
+    const companyIds =
+      companyIdsFromAccess(access)
+        .filter(companyId =>
+          hasEffectivePermission(
+            access,
+            'finance.view',
+            companyId
+          )
+        );
+
+    if (!companyIds.length) {
+      return res.json([]);
+    }
+
+    const placeholders =
+      companyIds
+        .map(() => '?')
+        .join(',');
+
+    res.json(
+      await q(
+        `${baseSql}
+         WHERE p.company_id
+           IN (${placeholders})
+         ORDER BY
+           p.payment_date DESC,
+           p.id DESC`,
+        companyIds
+      )
+    );
+  })
+);
+
+
+
+
+app.post(
+  '/api/customer-payments',
+  requireEffectivePermission(
+    'finance.create'
+  ),
+  safe(async (req, res) => {
+    const {
+      company_id,
+      invoice_id,
+      payment_date,
+      amount,
+      currency='INR',
+      payment_method='bank_transfer',
+      reference_number,
+      notes
+    } = req.body;
+
+    const companyId =
+      Number(company_id);
+
+    const invoiceId =
+      invoice_id
+        ? Number(invoice_id)
+        : null;
+
+    if (!companyId) {
+      return res.status(400).json({
+        message:
+          'Company is required.'
+      });
+    }
+
+    if (!payment_date) {
+      return res.status(400).json({
+        message:
+          'Payment date is required.'
+      });
+    }
+
+    const amountNumber =
+      Number(amount);
+
+    if (
+      !Number.isFinite(amountNumber) ||
+      amountNumber <= 0
+    ) {
+      return res.status(400).json({
+        message:
+          'Payment amount must be greater than zero.'
+      });
+    }
+
+    const access =
+      req.access ||
+      await buildUserAccess(req.user);
+
+    if (
+      !hasEffectivePermission(
+        access,
+        'finance.create',
+        companyId
+      )
+    ) {
+      return res.status(403).json({
+        message:
+          'You do not have access to this company.'
+      });
+    }
+
+    const allowedMethods =
+      new Set([
+        'cash',
+        'bank_transfer',
+        'card',
+        'cheque',
+        'upi',
+        'other'
+      ]);
+
+    const cleanMethod =
+      allowedMethods.has(
+        payment_method
+      )
+        ? payment_method
+        : 'other';
+
+    const conn =
+      await pool.getConnection();
+
+    try {
+      await conn.beginTransaction();
+
+      let invoice = null;
+
+      if (invoiceId) {
+        const [rows] =
+          await conn.query(
+            `SELECT
+               id,
+               company_id,
+               invoice_number,
+               status,
+               total_amount,
+               paid_amount,
+               balance_amount
+             FROM sales_invoices
+             WHERE id=?
+             FOR UPDATE`,
+            [invoiceId]
+          );
+
+        invoice =
+          rows[0];
+
+        if (!invoice) {
+          await conn.rollback();
+
+          return res.status(404).json({
+            message:
+              'Sales invoice not found.'
+          });
+        }
+
+        if (
+          Number(invoice.company_id)
+          !== companyId
+        ) {
+          await conn.rollback();
+
+          return res.status(400).json({
+            message:
+              'Invoice belongs to a different company.'
+          });
+        }
+
+        if (
+          ![
+            'issued',
+            'partially_paid'
+          ].includes(invoice.status)
+        ) {
+          await conn.rollback();
+
+          return res.status(409).json({
+            message:
+              'Payments can only be recorded against issued invoices.'
+          });
+        }
+
+        if (
+          amountNumber >
+          Number(invoice.balance_amount)
+        ) {
+          await conn.rollback();
+
+          return res.status(400).json({
+            message:
+              'Payment cannot exceed the outstanding invoice balance.'
+          });
+        }
+      }
+
+      const [paymentResult] =
+        await conn.query(
+          `INSERT INTO customer_payments
+           (
+             company_id,
+             invoice_id,
+             payment_date,
+             amount,
+             currency,
+             payment_method,
+             reference_number,
+             notes,
+             received_by
+           )
+           VALUES
+           (?,?,?,?,?,?,?,?,?)`,
+          [
+            companyId,
+            invoiceId,
+            payment_date,
+            amountNumber,
+            currency || 'INR',
+            cleanMethod,
+            text(reference_number),
+            text(notes),
+            req.user?.id || null
+          ]
+        );
+
+      if (invoice) {
+        const newPaid =
+          Number(
+            (
+              Number(
+                invoice.paid_amount
+              ) +
+              amountNumber
+            ).toFixed(2)
+          );
+
+        const newBalance =
+          Number(
+            Math.max(
+              0,
+              Number(
+                invoice.total_amount
+              ) -
+              newPaid
+            ).toFixed(2)
+          );
+
+        const newStatus =
+          newBalance <= 0
+            ? 'paid'
+            : 'partially_paid';
+
+        await conn.query(
+          `UPDATE sales_invoices
+           SET
+             paid_amount=?,
+             balance_amount=?,
+             status=?
+           WHERE id=?`,
+          [
+            newPaid,
+            newBalance,
+            newStatus,
+            invoiceId
+          ]
+        );
+      }
+
+      await conn.query(
+        `INSERT INTO audit_logs
+         (
+           user_id,
+           action,
+           entity_type,
+           entity_name,
+           ip_address
+         )
+         VALUES (?,?,?,?,?)`,
+        [
+          req.user?.id || null,
+          'Recorded customer payment',
+          'customer_payment',
+          invoice
+            ? invoice.invoice_number
+            : `Payment #${paymentResult.insertId}`,
+          req.ip
+        ]
+      );
+
+      await conn.commit();
+
+      res.status(201).json({
+        id:
+          paymentResult.insertId,
+        ok: true
+      });
+    } catch (err) {
+      try {
+        await conn.rollback();
+      } catch {}
+
+      throw err;
+    } finally {
+      conn.release();
+    }
+  })
+);
+
+
+app.delete(
+  '/api/customer-payments/:id',
+  requireEffectivePermission(
+    'finance.edit'
+  ),
+  safe(async (req, res) => {
+    const paymentId =
+      Number(req.params.id);
+
+    const conn =
+      await pool.getConnection();
+
+    try {
+      await conn.beginTransaction();
+
+      const [rows] =
+        await conn.query(
+          `SELECT
+             id,
+             company_id,
+             invoice_id,
+             amount,
+             payment_date
+           FROM customer_payments
+           WHERE id=?
+           FOR UPDATE`,
+          [paymentId]
+        );
+
+      const payment =
+        rows[0];
+
+      if (!payment) {
+        await conn.rollback();
+
+        return res.status(404).json({
+          message:
+            'Payment not found.'
+        });
+      }
+
+      const access =
+        req.access ||
+        await buildUserAccess(
+          req.user
+        );
+
+      if (
+        !hasEffectivePermission(
+          access,
+          'finance.edit',
+          payment.company_id
+        )
+      ) {
+        await conn.rollback();
+
+        return res.status(403).json({
+          message:
+            'You do not have access to this company.'
+        });
+      }
+
+      if (payment.invoice_id) {
+        const [invoiceRows] =
+          await conn.query(
+            `SELECT
+               id,
+               invoice_number,
+               total_amount,
+               paid_amount,
+               status
+             FROM sales_invoices
+             WHERE id=?
+             FOR UPDATE`,
+            [
+              payment.invoice_id
+            ]
+          );
+
+        const invoice =
+          invoiceRows[0];
+
+        if (invoice) {
+          const newPaid =
+            Number(
+              Math.max(
+                0,
+                Number(
+                  invoice.paid_amount
+                ) -
+                Number(
+                  payment.amount
+                )
+              ).toFixed(2)
+            );
+
+          const newBalance =
+            Number(
+              Math.max(
+                0,
+                Number(
+                  invoice.total_amount
+                ) -
+                newPaid
+              ).toFixed(2)
+            );
+
+          const newStatus =
+            newPaid <= 0
+              ? 'issued'
+              : 'partially_paid';
+
+          await conn.query(
+            `UPDATE sales_invoices
+             SET
+               paid_amount=?,
+               balance_amount=?,
+               status=?
+             WHERE id=?`,
+            [
+              newPaid,
+              newBalance,
+              newStatus,
+              payment.invoice_id
+            ]
+          );
+        }
+      }
+
+      await conn.query(
+        `DELETE FROM customer_payments
+         WHERE id=?`,
+        [paymentId]
+      );
+
+      await conn.query(
+        `INSERT INTO audit_logs
+         (
+           user_id,
+           action,
+           entity_type,
+           entity_name,
+           ip_address
+         )
+         VALUES (?,?,?,?,?)`,
+        [
+          req.user?.id || null,
+          'Reversed customer payment',
+          'customer_payment',
+          `Payment #${paymentId}`,
+          req.ip
+        ]
+      );
+
+      await conn.commit();
+
+      res.json({ ok: true });
+    } catch (err) {
+      try {
+        await conn.rollback();
+      } catch {}
+
+      throw err;
+    } finally {
+      conn.release();
+    }
+  })
+);
+
+app.get(
+  '/api/finance/receivables-summary',
+  requireEffectivePermission(
+    'finance.view'
+  ),
+  safe(async (req, res) => {
+    const access =
+      req.access ||
+      await buildUserAccess(req.user);
+
+    if (
+      access.globalRole ===
+      'group_admin'
+    ) {
+      const [[summary]] =
+        await pool.query(
+          `SELECT
+             COUNT(*) invoice_count,
+             COALESCE(
+               SUM(balance_amount),
+               0
+             ) outstanding,
+             COALESCE(
+               SUM(
+                 CASE
+                   WHEN
+                     due_date IS NOT NULL
+                     AND due_date < CURDATE()
+                   THEN balance_amount
+                   ELSE 0
+                 END
+               ),
+               0
+             ) overdue
+           FROM finance_receivables`
+        );
+
+      return res.json(summary);
+    }
+
+    const companyIds =
+      companyIdsFromAccess(access)
+        .filter(companyId =>
+          hasEffectivePermission(
+            access,
+            'finance.view',
+            companyId
+          )
+        );
+
+    if (!companyIds.length) {
+      return res.json({
+        invoice_count: 0,
+        outstanding: 0,
+        overdue: 0
+      });
+    }
+
+    const placeholders =
+      companyIds
+        .map(() => '?')
+        .join(',');
+
+    const [[summary]] =
+      await pool.query(
+        `SELECT
+           COUNT(*) invoice_count,
+           COALESCE(
+             SUM(balance_amount),
+             0
+           ) outstanding,
+           COALESCE(
+             SUM(
+               CASE
+                 WHEN
+                   due_date IS NOT NULL
+                   AND due_date < CURDATE()
+                 THEN balance_amount
+                 ELSE 0
+               END
+             ),
+             0
+           ) overdue
+         FROM finance_receivables
+         WHERE company_id
+           IN (${placeholders})`,
+        companyIds
+      );
+
+    res.json(summary);
+  })
+);
+
+
 
 const port = Number(process.env.PORT || 5000);
 app.listen(port, () => console.log(`Insight API running on http://localhost:${port}`));

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Search, Eye, Download, ShieldCheck, X, Pencil, Trash2, Copy } from 'lucide-react';
+import { Plus, Search, Eye, Download, ShieldCheck, X, Pencil, Trash2, Copy, Boxes, Globe2, Mail, Share2, KeyRound, ScrollText, Building2, CheckCircle2, AlertTriangle, Layers3 } from 'lucide-react';
 import { api, getPermissions, getUser } from '../lib/api';
 
 const config = {
@@ -241,6 +241,36 @@ const config = {
 const pretty = s => s.replaceAll('_', ' ').replace(/\b\w/g, m => m.toUpperCase());
 const moneyKeys = new Set(['amount', 'salary', 'gross_salary', 'deduction', 'net_salary', 'monthly_rent', 'purchase_cost', 'security_deposit']);
 
+const workspaceMeta = {
+  assets: { kicker: 'ASSET OPERATIONS', icon: Boxes, action: 'Register asset', hint: 'Equipment custody, warranty and lifecycle control' },
+  domains: { kicker: 'DIGITAL PROPERTY', icon: Globe2, action: 'Add domain', hint: 'Renewals, ownership and registrar visibility' },
+  emails: { kicker: 'EMAIL ADMINISTRATION', icon: Mail, action: 'Add account', hint: 'Licenses, assignments and account health' },
+  social: { kicker: 'BRAND CHANNELS', icon: Share2, action: 'Add channel', hint: 'Official profiles, managers and channel status' },
+  credentials: { kicker: 'SECURE ACCESS VAULT', icon: KeyRound, action: 'Add credential', hint: 'Controlled secrets, recovery and 2FA ownership' },
+  audit: { kicker: 'GOVERNANCE & SECURITY', icon: ScrollText, hint: 'Immutable administrative and security activity' }
+};
+
+function workspaceStats(type, rows) {
+  const companies = new Set(rows.map(row => row.company_name).filter(Boolean)).size;
+  const active = rows.filter(row => ['active', 'available', 'assigned'].includes(String(row.status || '').toLowerCase())).length;
+  if (type === 'assets') return [
+    ['Total assets', rows.length, 'Complete asset register'],
+    ['Assigned', rows.filter(r => String(r.status).toLowerCase() === 'assigned').length, 'Currently in custody'],
+    ['Available', rows.filter(r => String(r.status).toLowerCase() === 'available').length, 'Ready for allocation'],
+    ['Companies', companies, 'Represented entities']
+  ];
+  if (type === 'domains') {
+    const limit = new Date(); limit.setDate(limit.getDate() + 90);
+    const expiring = rows.filter(r => r.expiry_date && new Date(r.expiry_date) <= limit && new Date(r.expiry_date) >= new Date()).length;
+    return [['Domains', rows.length, 'Registered properties'], ['Active', active, 'Operational domains'], ['Expiring soon', expiring, 'Within the next 90 days'], ['Auto-renew', rows.filter(r => Number(r.auto_renew) === 1 || r.auto_renew === true).length, 'Renewal protected']];
+  }
+  if (type === 'emails') return [['Accounts', rows.length, 'Directory total'], ['Active', active, 'Licensed and available'], ['Providers', new Set(rows.map(r => r.provider).filter(Boolean)).size, 'Connected platforms'], ['Companies', companies, 'Represented entities']];
+  if (type === 'social') return [['Channels', rows.length, 'Official profiles'], ['Active', active, 'Currently managed'], ['Platforms', new Set(rows.map(r => r.platform).filter(Boolean)).size, 'Social networks'], ['Companies', companies, 'Represented brands']];
+  if (type === 'credentials') return [['Vault records', rows.length, 'Protected references'], ['2FA assigned', rows.filter(r => r.twofa_owner).length, 'Recovery owners named'], ['Services', new Set(rows.map(r => r.service_name).filter(Boolean)).size, 'Connected systems'], ['Companies', companies, 'Represented entities']];
+  if (type === 'audit') return [['Events', rows.length, 'Recorded activities'], ['Users', new Set(rows.map(r => r.user_name).filter(Boolean)).size, 'Active operators'], ['Entity types', new Set(rows.map(r => r.entity_type).filter(Boolean)).size, 'Tracked resources'], ['Today', rows.filter(r => String(r.created_at || '').slice(0, 10) === new Date().toISOString().slice(0, 10)).length, 'Events recorded today']];
+  return [['Records', rows.length, 'Total entries'], ['Active', active, 'Operational records'], ['Companies', companies, 'Represented entities']];
+}
+
 const actionPermissions = {
   finance: {
     create: 'finance.create',
@@ -335,6 +365,8 @@ export default function DataModule({ type }) {
   const c = config[type];
   const [rows, setRows] = useState([]);
   const [q, setQ] = useState('');
+  const [companyFilter, setCompanyFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(() => defaultsFor(c.fields));
   const [companies, setCompanies] = useState([]);
@@ -374,10 +406,31 @@ export default function DataModule({ type }) {
     loadRows();
   }, [c.endpoint]);
 
-  const filtered = useMemo(
-    () => rows.filter(r => JSON.stringify(r).toLowerCase().includes(q.toLowerCase())),
-    [rows, q]
-  );
+  const filtered = useMemo(() => rows.filter(row => {
+    const matchesSearch = JSON.stringify(row).toLowerCase().includes(q.toLowerCase());
+    const matchesCompany = companyFilter === 'all' || row.company_name === companyFilter;
+    const matchesStatus = statusFilter === 'all' || String(row.status || '').toLowerCase() === statusFilter.toLowerCase();
+    return matchesSearch && matchesCompany && matchesStatus;
+  }), [rows, q, companyFilter, statusFilter]);
+
+  const companyOptions = [...new Set(rows.map(row => row.company_name).filter(Boolean))].sort();
+  const statusOptions = [...new Set(rows.map(row => row.status).filter(Boolean))].sort();
+  const stats = workspaceStats(type, rows);
+  const meta = workspaceMeta[type];
+  const WorkspaceIcon = meta?.icon || Layers3;
+
+  const exportRows = () => {
+    const escape = value => `"${String(value ?? '').replaceAll('"', '""')}"`;
+    const csv = [c.cols.map(pretty), ...filtered.map(row => c.cols.map(key => row[key]))]
+      .map(line => line.map(escape).join(','))
+      .join('\n');
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${type}-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   const openAdd = async () => {
     if (!c.fields || !canCreate) return;
@@ -527,21 +580,36 @@ export default function DataModule({ type }) {
   };
 
   return (
-    <div className="page">
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">INSIGHT MCSITOBES</p>
+    <div className={`page module-workspace module-${type}`}>
+      <header className="module-hero">
+        <div className="module-hero-main">
+          <span className="module-hero-icon"><WorkspaceIcon size={25} /></span>
+          <div>
+          <p className="eyebrow">{meta?.kicker || 'INSIGHT MCSITOBES'}</p>
           <h1>{c.title}</h1>
           <p>{c.subtitle}</p>
+          <span className="module-hero-hint"><CheckCircle2 size={14} />{meta?.hint}</span>
+          </div>
         </div>
         {type === 'audit'
           ? <span className="secure"><ShieldCheck size={16} />Immutable activity trail</span>
           : canCreate
-            ? <button className="primary-btn" onClick={openAdd}><Plus size={17} />Add record</button>
+            ? <button className="primary-btn" onClick={openAdd}><Plus size={17} />{meta?.action || 'Add record'}</button>
             : <span className="secure"><ShieldCheck size={16} />Read-only access</span>}
       </header>
 
-      <div className="toolbar">
+      <section className="module-stat-grid">
+        {stats.map(([label, value, note], index) => (
+          <article className="module-stat-card" key={label}>
+            <span className={`module-stat-icon stat-${index}`}>
+              {index === 0 ? <Layers3 size={18} /> : index === 1 ? <CheckCircle2 size={18} /> : index === 2 ? <AlertTriangle size={18} /> : <Building2 size={18} />}
+            </span>
+            <div><strong>{value}</strong><span>{label}</span><small>{note}</small></div>
+          </article>
+        ))}
+      </section>
+
+      <div className="toolbar module-toolbar">
         <div className="search">
           <Search size={17} />
           <input
@@ -550,10 +618,22 @@ export default function DataModule({ type }) {
             onChange={e => setQ(e.target.value)}
           />
         </div>
-        <button className="secondary-btn"><Download size={16} />Export</button>
+        {companyOptions.length > 1 && <select value={companyFilter} onChange={e => setCompanyFilter(e.target.value)} aria-label="Filter by company">
+          <option value="all">All companies</option>
+          {companyOptions.map(company => <option key={company}>{company}</option>)}
+        </select>}
+        {statusOptions.length > 0 && <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Filter by status">
+          <option value="all">All statuses</option>
+          {statusOptions.map(status => <option key={status}>{status}</option>)}
+        </select>}
+        <button className="secondary-btn" onClick={exportRows}><Download size={16} />Export CSV</button>
       </div>
 
-      <section className="table-card">
+      <section className="table-card module-table-card">
+        <div className="module-table-heading">
+          <div><h2>{c.title} register</h2><p>{filtered.length} of {rows.length} records shown</p></div>
+          <span><ShieldCheck size={15} />Permission controlled</span>
+        </div>
         <div className="table-scroll">
           <table>
             <thead>

@@ -9,7 +9,11 @@ import {
   X,
   ShieldCheck,
   Save,
-  LockKeyhole
+  LockKeyhole,
+  UsersRound,
+  Building2,
+  Shield,
+  Download
 } from 'lucide-react';
 import { api, getPermissions, getUser } from '../lib/api';
 
@@ -26,6 +30,8 @@ export default function UsersAccess() {
   const [companies, setCompanies] = useState([]);
   const [roles, setRoles] = useState([]);
   const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [accessFilter, setAccessFilter] = useState('all');
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyForm);
@@ -67,16 +73,20 @@ export default function UsersAccess() {
   const filtered = useMemo(() => {
     const text = query.trim().toLowerCase();
 
-    if (!text) return rows;
+    return rows.filter(row => {
+      const matchesText = !text || `${row.name || ''} ${row.email || ''} ${row.global_role || ''} ${row.company_access || ''}`.toLowerCase().includes(text);
+      const matchesStatus = statusFilter === 'all' || row.status === statusFilter;
+      const matchesAccess = accessFilter === 'all' || (accessFilter === 'group_admin' ? row.global_role === 'group_admin' : accessFilter === 'company' ? row.global_role !== 'group_admin' && row.company_access : row.global_role !== 'group_admin' && !row.company_access);
+      return matchesText && matchesStatus && matchesAccess;
+    });
+  }, [rows, query, statusFilter, accessFilter]);
 
-    return rows.filter(row =>
-      `${row.name || ''} ${row.email || ''} ${row.global_role || ''} ${
-        row.company_access || ''
-      }`
-        .toLowerCase()
-        .includes(text)
-    );
-  }, [rows, query]);
+  const exportCsv = () => {
+    const escape = value => `"${String(value ?? '').replaceAll('"', '""')}"`;
+    const data = [['Name','Email','Global role','Company access','Status'], ...filtered.map(row => [row.name,row.email,row.global_role,row.company_access,row.status])];
+    const url = URL.createObjectURL(new Blob([`\uFEFF${data.map(line => line.map(escape).join(',')).join('\n')}`], { type:'text/csv;charset=utf-8' }));
+    const link = document.createElement('a'); link.href=url; link.download='users-and-access.csv'; link.click(); URL.revokeObjectURL(url);
+  };
 
   const roleForCompany = id =>
     form.access.find(a => Number(a.company_id) === Number(id))?.role_key || '';
@@ -279,8 +289,9 @@ export default function UsersAccess() {
   }
 
   return (
-    <div className="page">
-      <header className="page-header" style={s.pageHeader}>
+    <div className="page users-access-page">
+      <header className="users-access-hero">
+        <div className="users-access-hero-icon"><UsersRound size={24}/></div>
         <div>
           <p className="eyebrow">ADMINISTRATION</p>
           <h1>Users & Access</h1>
@@ -302,20 +313,15 @@ export default function UsersAccess() {
         )}
       </header>
 
-      <div style={s.statsGrid}>
-        <Stat label="Total users" value={rows.length} />
-        <Stat
-          label="Active"
-          value={rows.filter(row => row.status === 'active').length}
-        />
-        <Stat
-          label="Company users"
-          value={rows.filter(row => row.global_role !== 'group_admin').length}
-        />
-      </div>
+      <section className="users-access-stats">
+        <Stat icon={UsersRound} label="Total users" value={rows.length} note="System accounts" tone="blue"/>
+        <Stat icon={UserCheck} label="Active" value={rows.filter(row => row.status === 'active').length} note="Can sign in" tone="green"/>
+        <Stat icon={Building2} label="Company users" value={rows.filter(row => row.global_role !== 'group_admin').length} note="Scoped access" tone="purple"/>
+        <Stat icon={Shield} label="Access roles" value={roles.filter(role=>role.role_key!=='group_admin').length} note="Available assignments" tone="amber"/>
+      </section>
 
-      <div className="toolbar" style={s.toolbar}>
-        <div className="search" style={s.searchBox}>
+      <div className="users-access-toolbar">
+        <div className="users-access-search">
           <Search size={17} />
           <input
             placeholder="Search name, email or company access"
@@ -323,15 +329,15 @@ export default function UsersAccess() {
             onChange={e => setQuery(e.target.value)}
           />
         </div>
-
-        <div style={s.resultCount}>
-          {filtered.length} {filtered.length === 1 ? 'user' : 'users'}
-        </div>
+        <select value={accessFilter} onChange={e=>setAccessFilter(e.target.value)}><option value="all">All access levels</option><option value="group_admin">Group administrators</option><option value="company">Company access</option><option value="none">No company access</option></select>
+        <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option value="all">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option></select>
+        <button onClick={exportCsv}><Download size={15}/>Export</button>
       </div>
 
       {error && !open && <div style={s.error}>{error}</div>}
 
-      <section className="table-card" style={s.tableCard}>
+      <section className="table-card users-access-table" style={s.tableCard}>
+        <div className="users-access-table-head"><div><strong>User directory</strong><span>{filtered.length} of {rows.length} users shown</span></div><span><ShieldCheck size={14}/>Role-based access control</span></div>
         <div className="table-scroll">
           <table>
             <thead>
@@ -731,11 +737,11 @@ export default function UsersAccess() {
   );
 }
 
-function Stat({ label, value }) {
+function Stat({ icon: Icon, label, value, note, tone }) {
   return (
-    <div style={s.statCard}>
-      <span style={s.statLabel}>{label}</span>
-      <strong style={s.statValue}>{value}</strong>
+    <div className="users-access-stat">
+      <div className={`users-access-stat-icon ${tone}`}><Icon size={18}/></div>
+      <span><small>{label}</small><strong>{value}</strong><em>{note}</em></span>
     </div>
   );
 }

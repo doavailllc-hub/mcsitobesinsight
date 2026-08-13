@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Upload, FolderPlus, Folder, FileText, Image as ImageIcon, Download, ExternalLink,
-  Trash2, Pencil, ChevronRight, Home, Search, X, MoreVertical, Grid3X3
+  Trash2, Pencil, ChevronRight, Home, Search, X, MoreVertical, Grid3X3,
+  ShieldCheck, HardDrive, LockKeyhole, CalendarClock, Check, FileSpreadsheet,
+  FileArchive, Presentation, FileCode2
 } from 'lucide-react';
 import { api, getPermissions, getUser } from '../lib/api';
 
@@ -12,12 +14,14 @@ export default function Files() {
   const [files, setFiles] = useState([]);
   const [folderId, setFolderId] = useState(null);
   const [query, setQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
   const [loading, setLoading] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [folderOpen, setFolderOpen] = useState(false);
   const [editFile, setEditFile] = useState(null);
   const [folderName, setFolderName] = useState('');
   const [error, setError] = useState('');
+  const [selectedIds, setSelectedIds] = useState([]);
   const inputRef = useRef(null);
 
   const user = getUser();
@@ -57,7 +61,10 @@ export default function Files() {
 
   useEffect(() => {
     setFolderId(null);
+    setSelectedIds([]);
   }, [companyId]);
+
+  useEffect(() => { setSelectedIds([]); }, [folderId]);
 
   const childFolders = useMemo(
     () => folders.filter(f => Number(f.parent_folder_id || 0) === Number(folderId || 0))
@@ -67,10 +74,20 @@ export default function Files() {
 
   const visibleFiles = useMemo(
     () => files.filter(f =>
+      (categoryFilter === 'all' || (f.category || 'General') === categoryFilter) &&
       `${f.name} ${f.category || ''} ${f.mime_type || ''}`.toLowerCase().includes(query.toLowerCase())
     ),
-    [files, query]
+    [files, query, categoryFilter]
   );
+
+  const categories = [...new Set(files.map(file => file.category || 'General'))].sort();
+  const confidentialCount = files.filter(file => Number(file.confidential)).length;
+  const expiringCount = files.filter(file => {
+    if (!file.expiry_date) return false;
+    const days = (new Date(file.expiry_date) - Date.now()) / 86400000;
+    return days >= 0 && days <= 90;
+  }).length;
+  const totalSize = files.reduce((sum, file) => sum + Number(file.file_size || 0), 0);
 
   const breadcrumb = useMemo(() => {
     const chain = [];
@@ -133,6 +150,22 @@ export default function Files() {
     }
   };
 
+  const toggleSelected = id => setSelectedIds(current =>
+    current.includes(id) ? current.filter(value => value !== id) : [...current, id]
+  );
+
+  const deleteSelected = async () => {
+    if (!canManage || !selectedIds.length || !window.confirm(`Delete ${selectedIds.length} selected file${selectedIds.length === 1 ? '' : 's'} from Insight and AWS S3?`)) return;
+    try {
+      await Promise.all(selectedIds.map(id => api.delete(`/file-items/${id}`)));
+      setSelectedIds([]);
+      await load();
+    } catch (err) {
+      window.alert(err.response?.data?.message || 'Some selected files could not be deleted.');
+      await load();
+    }
+  };
+
   const saveFile = async e => {
     e.preventDefault();
     if (!canManage) return;
@@ -159,14 +192,15 @@ export default function Files() {
   };
 
   return (
-    <div className="page">
-      <header className="page-header">
-        <div>
+    <div className="page files-page">
+      <header className="files-hero">
+        <div className="files-hero-icon"><HardDrive size={24}/></div>
+        <div className="files-hero-copy">
           <p className="eyebrow">DOCUMENT MANAGEMENT</p>
           <h1>Files</h1>
-          <p>Private company files stored securely in AWS S3.</p>
+          <p>Organize, protect and monitor company documents stored securely in AWS S3.</p>
         </div>
-        <div style={s.headerActions}>
+        <div className="files-hero-actions">
           {canManage && (
             <button className="secondary-btn" onClick={() => { setError(''); setFolderOpen(true); }}>
               <FolderPlus size={17}/>New folder
@@ -178,28 +212,40 @@ export default function Files() {
             </button>
           )}
           {!canUpload && !canManage && (
-            <span className="secure">Read-only access</span>
+            <span className="secure"><ShieldCheck size={15}/>Read-only access</span>
           )}
         </div>
       </header>
 
-      <div style={s.topbar}>
-        <select style={s.companySelect} value={companyId} onChange={e => setCompanyId(e.target.value)}>
+      <section className="file-stats">
+        <FileStat icon={FileText} label="Files in view" value={files.length} note="Current location" tone="blue"/>
+        <FileStat icon={Folder} label="Folders" value={childFolders.length} note="Current level" tone="purple"/>
+        <FileStat icon={LockKeyhole} label="Confidential" value={confidentialCount} note="Restricted documents" tone="red"/>
+        <FileStat icon={CalendarClock} label="Expiring soon" value={expiringCount} note="Within 90 days" tone="amber"/>
+      </section>
+
+      <div className="files-toolbar">
+        <select value={companyId} onChange={e => setCompanyId(e.target.value)} aria-label="Company">
           {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
 
-        <div className="search" style={{ flex: 1 }}>
+        <div className="files-search">
           <Search size={17}/>
           <input placeholder="Search files and folders" value={query} onChange={e => setQuery(e.target.value)}/>
         </div>
+        <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} aria-label="Category">
+          <option value="all">All categories</option>
+          {categories.map(category => <option key={category}>{category}</option>)}
+        </select>
+        <span className="files-storage"><HardDrive size={14}/>{bytes(totalSize)} in this folder</span>
       </div>
 
-      <div style={s.breadcrumbs}>
-        <button style={s.crumb} onClick={() => setFolderId(null)}><Home size={15}/>{currentCompany?.name || 'Files'}</button>
+      <div className="files-breadcrumbs">
+        <button onClick={() => setFolderId(null)}><Home size={15}/>{currentCompany?.name || 'Files'}</button>
         {breadcrumb.map(folder => (
-          <span key={folder.id} style={s.crumbWrap}>
+          <span key={folder.id}>
             <ChevronRight size={15}/>
-            <button style={s.crumb} onClick={() => setFolderId(folder.id)}>{folder.name}</button>
+            <button onClick={() => setFolderId(folder.id)}>{folder.name}</button>
           </span>
         ))}
       </div>
@@ -211,9 +257,9 @@ export default function Files() {
               <div style={s.sectionTitle}><Folder size={18}/><strong>Folders</strong></div>
               <div style={s.folderGrid}>
                 {childFolders.map(folder => (
-                  <div key={folder.id} style={s.folderCard}>
+                  <div key={folder.id} style={s.folderCard} className="file-folder-card">
                     <button style={s.folderMain} onClick={() => setFolderId(folder.id)}>
-                      <div style={s.folderIcon}><Folder size={23}/></div>
+                      <div style={s.folderIcon} className="file-folder-icon"><Folder size={27}/></div>
                       <div style={{ textAlign: 'left', minWidth: 0 }}>
                         <strong style={s.ellipsis}>{folder.name}</strong>
                         <span style={s.meta}>{folder.file_count} files · {folder.child_folders} folders</span>
@@ -232,7 +278,16 @@ export default function Files() {
           )}
 
           <section style={s.section}>
-            <div style={s.sectionTitle}><Grid3X3 size={18}/><strong>Files</strong><span style={s.count}>{visibleFiles.length}</span></div>
+            <div className="file-gallery-heading" style={s.sectionTitle}><div><Grid3X3 size={18}/><strong>Files</strong><span style={s.count}>{visibleFiles.length}</span></div><span>Click a card to select · double-click to open</span></div>
+
+            {!!selectedIds.length && <div className="file-selection-bar">
+              <span><Check size={15}/><strong>{selectedIds.length}</strong> selected</span>
+              <div>
+                <button onClick={() => setSelectedIds(visibleFiles.map(file => file.id))}>Select all</button>
+                <button onClick={() => setSelectedIds([])}>Clear</button>
+                {canManage && <button className="danger" onClick={deleteSelected}><Trash2 size={14}/>Delete selected</button>}
+              </div>
+            </div>}
 
             {!visibleFiles.length ? (
               <div style={s.emptyBox}>
@@ -246,13 +301,18 @@ export default function Files() {
                 {visibleFiles.map(file => {
                   const isImage = String(file.mime_type || '').startsWith('image/');
                   const isPdf = file.mime_type === 'application/pdf';
+                  const expiryDays = file.expiry_date ? Math.ceil((new Date(file.expiry_date) - Date.now()) / 86400000) : null;
                   return (
-                    <article key={file.id} style={s.fileCard}>
+                    <article key={file.id} style={s.fileCard} className={`file-gallery-card ${selectedIds.includes(file.id) ? 'selected' : ''}`} onClick={() => toggleSelected(file.id)} onDoubleClick={() => file.preview_url && window.open(file.preview_url, '_blank', 'noopener,noreferrer')}>
                       <div style={s.preview}>
                         {isImage && file.preview_url
                           ? <img src={file.preview_url} alt={file.name} style={s.image}/>
-                          : <div style={s.fileIcon}>{isPdf ? <FileText size={42}/> : <FileText size={38}/>}</div>}
+                          : <FilePreview file={file} isPdf={isPdf}/>} 
+                        <span className="file-select-check">{selectedIds.includes(file.id) ? <Check size={14}/> : null}</span>
                         {Number(file.confidential) ? <span style={s.privateBadge}>Private</span> : null}
+                        {expiryDays !== null && <span className={`file-expiry-badge ${expiryDays < 0 ? 'expired' : expiryDays <= 90 ? 'soon' : ''}`}>
+                          {expiryDays < 0 ? 'Expired' : expiryDays <= 90 ? `Expires in ${expiryDays}d` : 'Expiry tracked'}
+                        </span>}
                       </div>
 
                       <div style={s.fileBody}>
@@ -261,18 +321,18 @@ export default function Files() {
                         <span style={s.meta}>{file.created_at || file.updated_at}</span>
 
                         <div style={s.fileActions}>
-                          <button style={s.iconBtn} title="Open" onClick={() => window.open(file.preview_url, '_blank', 'noopener,noreferrer')}>
+                          <button style={s.iconBtn} title="Open preview" disabled={!file.preview_url} onClick={event => { event.stopPropagation(); file.preview_url && window.open(file.preview_url, '_blank', 'noopener,noreferrer'); }}>
                             <ExternalLink size={16}/>
                           </button>
-                          <a style={s.iconLink} title="Download" href={file.download_url} target="_blank" rel="noreferrer">
+                          <a style={s.iconLink} title="Download" href={file.download_url} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}>
                             <Download size={16}/>
                           </a>
                           {canManage && (
                             <>
-                              <button style={s.iconBtn} title="Edit / Move" onClick={() => setEditFile({ ...file })}>
+                              <button style={s.iconBtn} title="Edit / Move" onClick={event => { event.stopPropagation(); setEditFile({ ...file }); }}>
                                 <Pencil size={16}/>
                               </button>
-                              <button style={s.iconDanger} title="Delete" onClick={() => deleteFile(file)}>
+                              <button style={s.iconDanger} title="Delete" onClick={event => { event.stopPropagation(); deleteFile(file); }}>
                                 <Trash2 size={16}/>
                               </button>
                             </>
@@ -359,6 +419,21 @@ export default function Files() {
       )}
     </div>
   );
+}
+
+function FileStat({ icon: Icon, label, value, note, tone }) {
+  return <div className="file-stat"><div className={`file-stat-icon ${tone}`}><Icon size={18}/></div><span><small>{label}</small><strong>{value}</strong><em>{note}</em></span></div>;
+}
+
+function FilePreview({ file, isPdf }) {
+  const extension = String(file.name || '').split('.').pop().toLowerCase();
+  const spreadsheet = ['xls', 'xlsx', 'csv'].includes(extension);
+  const slides = ['ppt', 'pptx'].includes(extension);
+  const archive = ['zip', 'rar', '7z'].includes(extension);
+  const code = ['txt', 'json', 'xml', 'html'].includes(extension);
+  const Icon = spreadsheet ? FileSpreadsheet : slides ? Presentation : archive ? FileArchive : code ? FileCode2 : FileText;
+  const tone = isPdf ? 'pdf' : spreadsheet ? 'sheet' : slides ? 'slides' : archive ? 'archive' : code ? 'code' : 'document';
+  return <div className={`file-type-preview ${tone}`}><Icon size={43}/><strong>{extension || 'FILE'}</strong><span>{isPdf ? 'PDF document' : spreadsheet ? 'Spreadsheet' : slides ? 'Presentation' : archive ? 'Archive' : code ? 'Text document' : 'Document'}</span></div>;
 }
 
 function UploadModal({ companyId, folderId, folderName, onClose, onDone }) {
