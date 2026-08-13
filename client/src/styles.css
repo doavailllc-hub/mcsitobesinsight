@@ -205,6 +205,8 @@ a {
     min-height: 100vh
 }
 
+.mobile-topbar,.mobile-nav-backdrop,.mobile-nav-close{display:none}
+
 .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
@@ -948,26 +950,36 @@ tr:last-child td {
 
 @media(max-width:760px) {
     .sidebar {
-        position: relative;
-        width: 100%;
-        height: auto
+        position: fixed;
+        inset: 0 auto 0 0;
+        z-index: 3000;
+        width: min(300px,86vw);
+        height: 100dvh;
+        padding-top: 14px;
+        transform: translateX(-105%);
+        transition: transform .22s ease;
+        box-shadow: 18px 0 45px rgba(15,23,42,.16)
     }
+
+    .sidebar.mobile-open { transform: translateX(0) }
 
     .app-shell {
         display: block
     }
 
+    .mobile-topbar{position:sticky;top:0;z-index:1200;height:64px;display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-bottom:1px solid #e5e7eb;background:rgba(255,255,255,.96);backdrop-filter:blur(12px)}
+    .mobile-topbar .brand{padding:0}.mobile-topbar .brand-mark{width:36px;height:36px}.mobile-topbar>button,.mobile-nav-close{width:40px;height:40px;display:grid;place-items:center;border:1px solid #e4e7ec;border-radius:10px;background:#fff;color:#475467}
+    .mobile-nav-backdrop{position:fixed;inset:0;z-index:2900;display:block;border:0;background:rgba(15,23,42,.46);backdrop-filter:blur(2px)}
+    .sidebar>.brand{padding-right:2px}.mobile-nav-close{margin-left:auto;flex:0 0 38px}
+
     .main {
         margin-left: 0
     }
 
-    .sidebar nav,
-    .company-switch {
-        display: none
-    }
-
     .page {
-        padding: 22px 14px
+        width:100%;
+        min-width:0;
+        padding: 14px 12px 40px
     }
 
     .stats-grid,
@@ -993,9 +1005,7 @@ tr:last-child td {
         grid-template-columns: 1fr
     }
 
-    .sidebar-user {
-        display: none
-    }
+    .sidebar-user { display:grid }
 }
 /* Operational workspaces: assets, domains, email, social, credentials and audit */
 .module-workspace { --module-accent: #2563eb; --module-soft: #eff6ff; }
@@ -1069,6 +1079,26 @@ tr:last-child td {
 .users-access-page{padding-top:28px}.users-access-hero{position:relative;overflow:hidden;min-height:130px;display:grid;grid-template-columns:48px 1fr auto;align-items:center;gap:14px;padding:24px 27px;border-radius:18px;background:linear-gradient(120deg,#22243a,#343a5d 62%,#515a86);color:#fff;box-shadow:0 15px 40px rgba(39,43,72,.16)}.users-access-hero::after{content:'';position:absolute;right:15%;top:-115px;width:190px;height:190px;border:1px solid rgba(255,255,255,.1);border-radius:50%}.users-access-hero-icon{width:46px;height:46px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.14);border-radius:12px;background:rgba(255,255,255,.08);color:#e0e3f4}.users-access-hero .eyebrow{margin:0 0 5px;color:#b8bfdf!important}.users-access-hero h1{margin:0;font-size:25px}.users-access-hero>div>p:last-child{margin:6px 0 0;color:#d2d6e8;font-size:11.5px}.users-access-hero>.primary-btn{z-index:1;min-height:39px;padding:0 13px;border:0;border-radius:9px;background:#fff;color:#414a74;font-size:10px;font-weight:700}.users-access-hero>.secure{z-index:1;color:#dfe2ef;font-size:9px}.users-access-stats{position:relative;z-index:2;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:-18px;padding:0 20px}.users-access-stat{display:flex;align-items:center;gap:10px;padding:13px 14px;border-radius:12px;background:#fff;box-shadow:0 7px 23px rgba(39,43,72,.075)}.users-access-stat-icon{width:36px;height:36px;display:grid;place-items:center;border-radius:9px}.users-access-stat-icon.blue{background:#e8f3ff;color:#2d72ad}.users-access-stat-icon.green{background:#e8f8f0;color:#167d60}.users-access-stat-icon.purple{background:#eeeaff;color:#6753c4}.users-access-stat-icon.amber{background:#fff3dd;color:#ad6d12}.users-access-stat small,.users-access-stat strong,.users-access-stat em{display:block}.users-access-stat small{font-size:8px;color:#667085}.users-access-stat strong{font-size:16px;color:#101828}.users-access-stat em{font-size:7px;color:#98a2b3;font-style:normal}.users-access-toolbar{display:flex;gap:8px;margin-top:16px}.users-access-search{flex:1;min-height:40px;display:flex;align-items:center;gap:8px;padding:0 11px;border:1px solid #e1e5ec;border-radius:9px;background:#fff}.users-access-search input{width:100%;border:0;outline:0;font-size:11px}.users-access-toolbar select{min-height:40px;padding:0 28px 0 9px;border:1px solid #e1e5ec;border-radius:9px;background:#fff;font-size:10px}.users-access-toolbar>button{display:flex;align-items:center;gap:5px;padding:0 10px;border:1px solid #e1e5ec;border-radius:9px;background:#fff;font:inherit;font-size:9px}.users-access-table{margin-top:13px}.users-access-table-head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;border-bottom:1px solid #edf0f3}.users-access-table-head>div strong,.users-access-table-head>div span{display:block}.users-access-table-head strong{font-size:11px}.users-access-table-head>div span{margin-top:3px;color:#98a2b3;font-size:8px}.users-access-table-head>span{display:flex;align-items:center;gap:5px;color:#667085;font-size:8px}.users-access-table tbody tr:hover{background:#f8f8fc}
 @media(max-width:1000px){.users-access-stats{grid-template-columns:repeat(2,1fr)}.users-access-toolbar{flex-wrap:wrap}.users-access-search{flex-basis:100%}}
 @media(max-width:700px){.users-access-page{padding-top:14px}.users-access-hero{grid-template-columns:42px 1fr;padding:20px}.users-access-hero>.primary-btn,.users-access-hero>.secure{grid-column:1/-1;width:fit-content}.users-access-stats{grid-template-columns:1fr;margin-top:12px;padding:0}.users-access-toolbar select{flex:1;min-width:0}.users-access-table-head>span{display:none}}
+
+/* Shared phone and tablet resilience */
+html,body,#root{max-width:100%;min-width:0}body{overflow-x:hidden}.main,.page,.table-card,.table-scroll{min-width:0}.table-scroll{-webkit-overflow-scrolling:touch;scrollbar-width:thin}.table-scroll table{white-space:nowrap}.table-scroll td,.table-scroll th{max-width:260px;overflow:hidden;text-overflow:ellipsis}.primary-btn,.secondary-btn,button,a,select{touch-action:manipulation}
+@media(max-width:760px){
+  .page-header{gap:14px;margin-bottom:18px}.page-header h1{font-size:23px}.page-header>.primary-btn,.page-header>.secondary-btn{width:100%;justify-content:center}
+  .toolbar{align-items:stretch;gap:8px}.toolbar>select,.toolbar>.secondary-btn{min-width:0;flex:1}.table-card{max-width:100%}.table-scroll{width:100%;overflow-x:auto}.table-scroll table{min-width:720px}
+  .dashboard-grid{gap:12px}.dashboard-stats{grid-template-columns:1fr!important}.dashboard-hero{border-radius:17px}.dashboard-hero h1{font-size:25px}
+  .people-hero,.products-hero,.bank-hero,.payroll-hero,.employees-hero,.companies-hero,.company-detail-hero,.reminders-hero,.offices-hero,.module-hero,.files-hero,.settings-hero,.users-access-hero{border-radius:16px}
+  .people-toolbar>select,.products-toolbar select,.bank-toolbar select,.payroll-toolbar>input,.payroll-toolbar select,.employee-toolbar select,.companies-toolbar select,.reminder-toolbar select,.office-toolbar select,.module-toolbar select,.files-toolbar select,.users-access-toolbar select{min-width:calc(50% - 4px);flex:1}
+  .people-export,.products-toolbar>button,.bank-toolbar>button,.payroll-export,.employee-toolbar>button,.companies-toolbar>button,.reminder-toolbar>button,.office-toolbar>button,.module-toolbar .secondary-btn,.users-access-toolbar>button{min-height:40px;justify-content:center}
+  [class*="-drawer"]{max-width:100vw!important}.payslip-drawer,.people-drawer,.employee-drawer,.bank-drawer,.company-detail-drawer,.office-drawer{width:100%!important}
+  [class*="-modal"]{max-width:calc(100vw - 16px)!important}.settings-content{min-width:0}.settings-preview{align-items:flex-start}
+  .file-gallery-card{min-width:0}.file-selection-bar button{min-height:36px}.users-access-table{overflow:hidden}
+}
+@media(max-width:430px){
+  .mobile-topbar{height:58px;padding:7px 10px}.mobile-topbar .brand span{display:none}.page{padding-left:10px;padding-right:10px}
+  .people-toolbar>select,.products-toolbar select,.bank-toolbar select,.payroll-toolbar>input,.payroll-toolbar select,.employee-toolbar select,.companies-toolbar select,.reminder-toolbar select,.office-toolbar select,.module-toolbar select,.files-toolbar select,.users-access-toolbar select{width:100%;flex-basis:100%}
+  .files-hero-actions,.payroll-hero-actions,.company-detail-actions{width:100%}.files-hero-actions button,.payroll-hero-actions button,.company-detail-actions button{flex:1;justify-content:center}
+  .settings-actions{flex-direction:column}.settings-actions button{width:100%}.reminder-row{grid-template-columns:42px minmax(0,1fr)!important}.reminder-status{grid-column:2}.reminder-actions{grid-column:2}
+}
 @media (max-width: 430px) { .module-stat-grid { grid-template-columns: 1fr; } .module-hero-main { flex-direction: column; } }
 
 /* Keep shared modules consistent with the established Companies/Office/Reminder pattern */

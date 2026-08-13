@@ -21,7 +21,9 @@ import {
   ScrollText,
   Settings,
   LogOut,
-  ChevronDown
+  ChevronDown,
+  Menu,
+  X
 } from 'lucide-react';
 
 import {
@@ -98,6 +100,7 @@ export default function Layout() {
   const [user, setUser] = useState(getUser());
   const [permissions, setPermissions] = useState(getPermissions());
   const [accessLoading, setAccessLoading] = useState(true);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -166,13 +169,21 @@ export default function Layout() {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      <header className="mobile-topbar">
+        <div className="brand"><div className="brand-mark">IM</div><div><strong>Insight</strong><span>MCSITOBES</span></div></div>
+        <button onClick={() => setMobileNavOpen(true)} aria-label="Open navigation"><Menu size={22}/></button>
+      </header>
+      {mobileNavOpen && (
+        <button className="mobile-nav-backdrop" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)}/>
+      )}
+      <aside className={`sidebar ${mobileNavOpen ? 'mobile-open' : ''}`}>
         <div className="brand">
           <div className="brand-mark">IM</div>
           <div>
             <strong>Insight</strong>
             <span>MCSITOBES</span>
           </div>
+          <button className="mobile-nav-close" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation"><X size={20}/></button>
         </div>
 
         <button className="company-switch">
@@ -207,6 +218,7 @@ export default function Layout() {
                     className={({ isActive }) =>
                       `nav-item ${isActive ? 'active' : ''}`
                     }
+                    onClick={() => setMobileNavOpen(false)}
                   >
                     <Icon size={18} />
                     <span>{name}</span>
