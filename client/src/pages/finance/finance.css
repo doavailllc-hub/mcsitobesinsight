@@ -343,6 +343,30 @@
   min-width: 0;
 }
 
+.finance-quick-chart { padding: 20px 22px; }
+.finance-chart-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.finance-chart-head .eyebrow { margin: 0 0 5px; color: #6676b5; }
+.finance-chart-head h2 { margin: 0; }
+.finance-chart-head > div:first-child > span { display: block; margin-top: 5px; color: var(--finance-muted); font-size: 11px; }
+.finance-chart-net { min-width: 150px; padding: 10px 12px; border: 1px solid #d9eee6; border-radius: 10px; background: #f2faf7; text-align: right; }
+.finance-chart-net span, .finance-chart-net strong { display: block; }
+.finance-chart-net span { color: #667085; font-size: 9px; }
+.finance-chart-net strong { margin-top: 4px; color: var(--finance-success); font-size: 16px; }
+.finance-chart-net.negative { border-color: #f3d5d0; background: #fff7f5; }
+.finance-chart-area { width: 100%; height: 300px; margin-top: 16px; }
+.finance-chart-tooltip { min-width: 180px; padding: 11px 12px; border: 1px solid #e4e7ec; border-radius: 10px; background: rgba(255,255,255,.98); box-shadow: 0 8px 24px rgba(16,24,40,.1); }
+.finance-chart-tooltip > strong { display: block; margin-bottom: 8px; color: #344054; font-size: 11px; }
+.finance-chart-tooltip span { display: grid; grid-template-columns: 7px 1fr auto; align-items: center; gap: 7px; margin-top: 6px; color: #667085; font-size: 10px; }
+.finance-chart-tooltip i { width: 7px; height: 7px; border-radius: 50%; }
+.finance-chart-tooltip b { color: #1d2939; font-size: 10px; }
+
+@media (max-width: 600px) {
+  .finance-quick-chart { padding: 17px 14px; }
+  .finance-chart-head { display: grid; }
+  .finance-chart-net { width: 100%; text-align: left; }
+  .finance-chart-area { height: 260px; }
+}
+
 /* ---------------- KPI cards ---------------- */
 
 .finance-grid {

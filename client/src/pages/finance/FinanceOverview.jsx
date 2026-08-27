@@ -7,6 +7,10 @@ import {
   FileText,
   WalletCards
 } from 'lucide-react';
+import {
+  Bar, CartesianGrid, ComposedChart, Legend, Line,
+  ResponsiveContainer, Tooltip, XAxis, YAxis
+} from 'recharts';
 import { api } from '../../lib/api';
 
 const money = value =>
@@ -144,6 +148,32 @@ export default function FinanceOverview() {
     );
   }, [rows]);
 
+  const monthlyActivity = useMemo(() => {
+    const now = new Date();
+    const months = Array.from({ length: 6 }, (_, index) => {
+      const date = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1);
+      return {
+        key: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
+        month: date.toLocaleDateString('en-IN', { month: 'short' }),
+        income: 0,
+        expense: 0,
+        net: 0
+      };
+    });
+    const byMonth = Object.fromEntries(months.map(month => [month.key, month]));
+
+    rows
+      .filter(row => (row.approval_status || 'approved') === 'approved')
+      .forEach(row => {
+        const month = byMonth[String(row.date || '').slice(0, 7)];
+        if (!month) return;
+        if (row.type === 'income') month.income += Number(row.amount || 0);
+        if (row.type === 'expense') month.expense += Number(row.amount || 0);
+      });
+
+    return months.map(month => ({ ...month, net: month.income - month.expense }));
+  }, [rows]);
+
   if (loading) {
     return (
       <div className="finance-card">
@@ -209,6 +239,35 @@ export default function FinanceOverview() {
           )}
           note="Past due balance"
         />
+      </section>
+
+      <section className="finance-card finance-quick-chart">
+        <div className="finance-chart-head">
+          <div>
+            <p className="eyebrow">CASH FLOW QUICK VIEW</p>
+            <h2>Income and expenses</h2>
+            <span>Approved transactions over the last six months</span>
+          </div>
+          <div className={`finance-chart-net ${stats.net < 0 ? 'negative' : ''}`}>
+            <span>Overall net movement</span>
+            <strong>{money(stats.net)}</strong>
+          </div>
+        </div>
+
+        <div className="finance-chart-area" role="img" aria-label="Six-month income, expense and net movement chart">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={monthlyActivity} margin={{ top: 12, right: 8, left: 0, bottom: 0 }}>
+              <CartesianGrid stroke="#eef1f5" strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#667085', fontSize: 11 }} />
+              <YAxis axisLine={false} tickLine={false} width={58} tick={{ fill: '#98a2b3', fontSize: 10 }} tickFormatter={compactMoney} />
+              <Tooltip content={<FinanceChartTooltip />} cursor={{ fill: '#f8fafc' }} />
+              <Legend iconType="circle" iconSize={7} wrapperStyle={{ fontSize: 11, paddingTop: 12 }} />
+              <Bar dataKey="income" name="Income" fill="#219a72" radius={[5, 5, 0, 0]} maxBarSize={28} />
+              <Bar dataKey="expense" name="Expense" fill="#e47b68" radius={[5, 5, 0, 0]} maxBarSize={28} />
+              <Line dataKey="net" name="Net movement" type="monotone" stroke="#4962b1" strokeWidth={2.5} dot={{ r: 3, fill: '#4962b1' }} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
       </section>
 
       <section className="finance-two">
@@ -336,6 +395,30 @@ export default function FinanceOverview() {
         </div>
       </section>
     </>
+  );
+}
+
+const compactMoney = value => {
+  const amount = Number(value || 0);
+  if (Math.abs(amount) >= 10000000) return `₹${(amount / 10000000).toFixed(1)}Cr`;
+  if (Math.abs(amount) >= 100000) return `₹${(amount / 100000).toFixed(1)}L`;
+  if (Math.abs(amount) >= 1000) return `₹${(amount / 1000).toFixed(0)}K`;
+  return `₹${amount}`;
+};
+
+function FinanceChartTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="finance-chart-tooltip">
+      <strong>{label}</strong>
+      {payload.map(item => (
+        <span key={item.dataKey}>
+          <i style={{ background: item.color }} />
+          {item.name}
+          <b>{money(item.value)}</b>
+        </span>
+      ))}
+    </div>
   );
 }
 
