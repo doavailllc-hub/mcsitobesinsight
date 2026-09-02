@@ -61,6 +61,7 @@ const sections = [
     label: 'Finance',
     items: [
       ['Finance & Accounts', '/finance', Wallet, 'finance.view'],
+      ['Investors', '/finance/investors', Handshake, 'finance.view'],
       ['Bank Accounts', '/bank', Landmark, 'bank.view'],
       ['Payroll', '/payroll', BadgeIndianRupee, 'payroll.view']
     ]
