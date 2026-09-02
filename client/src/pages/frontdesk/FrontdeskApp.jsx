@@ -10,6 +10,7 @@ import FrontdeskSettings from './FrontdeskSettings';
 import Cashbook from './Cashbook';
 import FrontdeskReports from './FrontdeskReports';
 import FrontdeskReminders from './FrontdeskReminders';
+import CustomerDirectory from './CustomerDirectory';
 import { api } from '../../lib/api';
 import '../finance/finance.css';
 import './frontdesk-extra.css';
@@ -17,7 +18,7 @@ import NotificationCenter from '../../components/NotificationCenter';
 
 const sections = [
   { label: 'Overview', items: [{ key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
-  { label: 'Loans', items: [{ key: 'loans', label: 'Loans', icon: Users }, { key: 'collections', label: 'Interest Collection', icon: HandCoins }, { key: 'payouts', label: 'Interest Payouts', icon: CircleDollarSign }, { key: 'reminders', label: 'Due Reminders', icon: BellRing }] },
+  { label: 'Lending', items: [{ key: 'customers', label: 'Customers', icon: Users }, { key: 'loans', label: 'Loans', icon: BookOpenText }, { key: 'collections', label: 'Interest Collection', icon: HandCoins }, { key: 'payouts', label: 'Interest Payouts', icon: CircleDollarSign }, { key: 'reminders', label: 'Due Reminders', icon: BellRing }] },
   { label: 'Cash & Expenses', items: [{ key: 'cashbook', label: 'Cashbook', icon: WalletCards }, { key: 'expenses', label: 'Office Expenses', icon: ReceiptIndianRupee }] },
   { label: 'Insights', items: [{ key: 'reports', label: 'Reports', icon: BarChart3 }] },
   { label: 'Administration', items: [{ key: 'settings', label: 'Settings', icon: Settings }] }
@@ -26,6 +27,7 @@ const sections = [
 const pageCopy = {
   dashboard: ['TODAY’S WORKSPACE', 'Front-desk overview', 'Monitor customers, upcoming interest and collections from one place.'],
   loans: ['LOAN REGISTRATION', 'Loans', 'Register loan applications, track approval and manage approved borrower accounts.'],
+  customers: ['CUSTOMER DIRECTORY', 'Customers', 'View borrower profiles automatically created from loan registrations.'],
   collections: ['DAILY COLLECTION', 'Interest collection', 'Prioritize due accounts and record monthly interest payments.'],
   payouts: ['MONTHLY PAYOUTS', 'Interest payouts', 'Pay monthly interest on time to investors who provided money to the company.'],
   reminders: ['FOLLOW-UP WORKSPACE', 'Due reminders', 'Review overdue, due-today and upcoming customers, then contact them from one list.'],
@@ -59,6 +61,7 @@ export default function FrontdeskApp() {
     <main className="frontdesk-main">
       <header className="frontdesk-page-header"><div className="frontdesk-title"><p className="eyebrow">{copy[0]}</p><h1>{copy[1]}</h1><p>{copy[2]}</p></div><div className="frontdesk-header-tools"><NotificationCenter className="frontdesk-notifications" onTarget={()=>openPage('reminders')}/><div className="frontdesk-date"><small>WORKING DATE</small><strong>{new Intl.DateTimeFormat('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }).format(new Date())}</strong></div></div></header>
       {page === 'dashboard' && <FrontdeskDashboard navigate={openPage} />}
+      {page === 'customers' && <CustomerDirectory navigate={openPage}/>} 
       {page === 'loans' && <Collections key={`loans-${preference.default_company_id}`} frontdesk defaultFilter="all" showStats={false} defaultCompanyId={preference.default_company_id}/>} 
       {page === 'collections' && <Collections key={`collections-${preference.default_company_id}`} frontdesk defaultFilter="due" defaultCompanyId={preference.default_company_id}/>} 
       {page === 'payouts' && <Investors key={`payouts-${preference.default_company_id}`} frontdesk defaultCompanyId={preference.default_company_id}/>} 
