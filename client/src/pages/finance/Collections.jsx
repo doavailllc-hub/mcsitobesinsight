@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, BadgeIndianRupee, CalendarClock, CheckCircle2, CreditCard, Eye, FileUp, MapPin, Phone, Plus, Printer, Search, Trash2, UserRound, Users, X } from 'lucide-react';
+import { AlertCircle, BadgeIndianRupee, BookOpenText, CalendarClock, CheckCircle2, CreditCard, Eye, FileUp, MapPin, Phone, Plus, Printer, Search, Trash2, UserRound, Users, X } from 'lucide-react';
 import { api } from '../../lib/api';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const money = (value, currency = 'INR') => new Intl.NumberFormat('en-IN', { style: 'currency', currency: currency || 'INR', maximumFractionDigits: 2 }).format(Number(value || 0));
 const emptyForm = { company_id: '', customer_name: '', phone: '', address: '', id_card_number: '', principal_amount: '', interest_rate: '', interest_type: 'percentage', money_given_date: today(), notes: '' };
 
-export default function Collections({ frontdesk = false, defaultFilter = 'active', showStats = true, defaultCompanyId = null }) {
+export default function Collections({ frontdesk = false, standalone = false, defaultFilter = 'active', showStats = true, defaultCompanyId = null }) {
   const [companies, setCompanies] = useState([]);
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState({});
@@ -95,7 +95,8 @@ export default function Collections({ frontdesk = false, defaultFilter = 'active
     await load();
   };
 
-  return <div className={frontdesk ? 'collection-frontdesk-content' : ''}>
+  return <div className={`${frontdesk ? 'collection-frontdesk-content' : ''} ${standalone ? 'loan-standalone-page page' : ''}`}>
+    {standalone&&<header className="loan-page-hero"><span><BookOpenText size={24}/></span><div><p className="eyebrow">LENDING OPERATIONS</p><h1>Loans</h1><p>Register borrowers, review approvals, monitor principal and manage monthly interest collections.</p></div></header>}
     {showStats && <section className="collection-stats">
       <Stat icon={Users} label="Active customers" value={summary.active_customers || 0} />
       <Stat icon={BadgeIndianRupee} label="Principal given" value={money(summary.principal_outstanding)} />
