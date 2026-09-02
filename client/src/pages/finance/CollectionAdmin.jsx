@@ -1,0 +1,28 @@
+import { useEffect, useState } from 'react';
+import { AlertTriangle, ArrowRight, BadgeIndianRupee, Building2, HandCoins, ReceiptText, ShieldAlert, Users } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { api } from '../../lib/api';
+
+const money=(value,currency='INR')=>new Intl.NumberFormat('en-IN',{style:'currency',currency:currency||'INR',maximumFractionDigits:2}).format(Number(value||0));
+
+export default function CollectionAdmin(){
+  const [data,setData]=useState({metrics:{},companies:[],high_risk_customers:[],recent_voids:[],staff_activity:[]});
+  const [error,setError]=useState('');
+  useEffect(()=>{api.get('/collections/admin-dashboard').then(result=>setData(result.data||{})).catch(err=>setError(err.response?.data?.message||'Unable to load collection control.'));},[]);
+  const m=data.metrics||{};
+  return <div className="collection-admin">
+    <section className="collection-admin-head"><div><p className="eyebrow">MANAGEMENT CONTROL</p><h2>Collection monitoring</h2><p>Review portfolio exposure, monthly performance, exceptions and front-desk activity.</p></div><Link className="primary-btn" to="/finance/collections/customers"><Users size={15}/>Manage customers</Link></section>
+    {error&&<div className="finance-error">{error}</div>}
+    <section className="collection-admin-metrics"><AdminMetric icon={BadgeIndianRupee} label="Principal outstanding" value={money(m.principal_outstanding)} note={`${m.active_customers||0} active customers`}/><AdminMetric icon={HandCoins} label="Collected this month" value={money(m.collected_this_month)} note={`${m.receipts_this_month||0} posted receipts`} tone="green"/><AdminMetric icon={AlertTriangle} label="Overdue exposure" value={money(m.overdue_value)} note={`${m.overdue_customers||0} overdue customers`} tone="red"/><AdminMetric icon={ReceiptText} label="Expected monthly" value={money(m.monthly_interest)} note="Current monthly interest"/></section>
+    <div className="collection-admin-grid"><section className="collection-admin-card company"><header><div><strong>Company performance</strong><span>Portfolio and current-month collection by company</span></div><Building2 size={18}/></header><div className="finance-table-scroll"><table className="finance-table"><thead><tr><th>Company</th><th>Customers</th><th>Principal</th><th>Overdue</th><th>Collected this month</th></tr></thead><tbody>{data.companies?.map(item=><tr key={item.id}><td><strong>{item.name}</strong></td><td>{item.active_customers}</td><td>{money(item.principal_outstanding,item.currency)}</td><td><span className={Number(item.overdue_customers)?'collection-admin-danger':''}>{item.overdue_customers} · {money(item.overdue_value,item.currency)}</span></td><td className="finance-money">{money(item.collected_this_month,item.currency)}</td></tr>)}</tbody></table></div></section>
+      <section className="collection-admin-card staff"><header><div><strong>Front-desk activity</strong><span>Posted collections in the last 30 days</span></div><Users size={18}/></header>{data.staff_activity?.length?<div className="collection-admin-staff-list">{data.staff_activity.map(item=><div key={item.staff_name}><span><strong>{item.staff_name}</strong><small>Last collection {item.last_collection?String(item.last_collection).slice(0,10):'—'}</small></span><span><strong>{money(item.collected_amount)}</strong><small>{item.receipt_count} receipts</small></span></div>)}</div>:<Empty text="No posted collections in the last 30 days."/>}</section>
+    </div>
+    <div className="collection-admin-grid lower"><section className="collection-admin-card"><header><div><strong>High-risk overdue accounts</strong><span>Oldest due accounts requiring management attention</span></div><AlertTriangle size={18}/></header>{data.high_risk_customers?.length?<div className="finance-table-scroll"><table className="finance-table"><thead><tr><th>Customer</th><th>Company</th><th>Days overdue</th><th>Principal</th><th>Monthly due</th></tr></thead><tbody>{data.high_risk_customers.map(item=><tr key={item.id}><td><strong>{item.customer_name}</strong><small>{item.phone||'No phone'}</small></td><td>{item.company_name}</td><td><span className="finance-badge rejected">{item.days_overdue} days</span></td><td>{money(item.principal_amount,item.currency)}</td><td className="finance-money">{money(item.monthly_interest_amount,item.currency)}</td></tr>)}</tbody></table></div>:<Empty text="No overdue customer accounts."/>}</section>
+      <section className="collection-admin-card"><header><div><strong>Voided receipt review</strong><span>Recent admin-authorized collection corrections</span></div><ShieldAlert size={18}/></header>{data.recent_voids?.length?<div className="collection-admin-void-list">{data.recent_voids.map(item=><div key={item.id}><span><strong>{item.receipt_number||`Receipt ${item.id}`}</strong><small>{item.customer_name} · {item.company_name}</small><p>{item.void_reason||'No reason provided'}</p></span><span><strong>{money(item.amount,item.currency)}</strong><small>Approved by {item.voided_by_name||'Admin'}</small></span></div>)}</div>:<Empty text="No voided collection receipts."/>}</section>
+    </div>
+    <Link className="collection-admin-manage-link" to="/finance/collections/customers">Open full customer and collection workspace <ArrowRight size={14}/></Link>
+  </div>;
+}
+
+function AdminMetric({icon:Icon,label,value,note,tone=''}){return <div className={`collection-admin-metric ${tone}`}><span><Icon size={18}/></span><div><small>{label}</small><strong>{value}</strong><p>{note}</p></div></div>}
+function Empty({text}){return <div className="collection-admin-empty">{text}</div>}

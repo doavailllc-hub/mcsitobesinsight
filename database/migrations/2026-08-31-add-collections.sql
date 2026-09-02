@@ -1,0 +1,42 @@
+CREATE TABLE IF NOT EXISTS collection_customers (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  company_id INT NOT NULL,
+  customer_name VARCHAR(180) NOT NULL,
+  phone VARCHAR(40),
+  address TEXT,
+  id_card_number VARCHAR(100) NOT NULL,
+  id_card_storage_key VARCHAR(500),
+  id_card_original_name VARCHAR(255),
+  id_card_mime_type VARCHAR(100),
+  principal_amount DECIMAL(15,2) NOT NULL,
+  interest_rate DECIMAL(8,4) NOT NULL,
+  interest_type ENUM('flat_amount','percentage') NOT NULL DEFAULT 'percentage',
+  monthly_interest_amount DECIMAL(15,2) NOT NULL,
+  money_given_date DATE NOT NULL,
+  next_interest_date DATE NOT NULL,
+  status ENUM('active','closed') NOT NULL DEFAULT 'active',
+  notes TEXT,
+  created_by INT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_collection_id_card (company_id,id_card_number),
+  KEY ix_collection_due (company_id,status,next_interest_date),
+  FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS collection_payments (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  customer_id INT NOT NULL,
+  amount DECIMAL(15,2) NOT NULL,
+  payment_date DATE NOT NULL,
+  interest_for_date DATE NOT NULL,
+  payment_method VARCHAR(40) NOT NULL DEFAULT 'cash',
+  reference_no VARCHAR(100),
+  notes TEXT,
+  collected_by INT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  KEY ix_collection_payment_customer (customer_id,payment_date),
+  FOREIGN KEY (customer_id) REFERENCES collection_customers(id) ON DELETE CASCADE,
+  FOREIGN KEY (collected_by) REFERENCES users(id) ON DELETE SET NULL
+);

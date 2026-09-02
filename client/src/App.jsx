@@ -27,6 +27,17 @@ import Payroll from './pages/Payroll';
 import Employees from './pages/Employees';
 import Reminders from './pages/Reminders';
 import Offices from './pages/Offices';
+import Collections from './pages/finance/Collections';
+import CollectionAdmin from './pages/finance/CollectionAdmin';
+import Investors from './pages/finance/Investors';
+import FrontdeskLogin from './pages/frontdesk/FrontdeskLogin';
+import FrontdeskApp from './pages/frontdesk/FrontdeskApp';
+import Programming from './pages/Programming';
+import PartnerLogin from './pages/partner/PartnerLogin';
+import PartnerPortal from './pages/partner/PartnerPortal';
+import PartnerAdmin from './pages/PartnerAdmin';
+import PartnerOperations from './pages/PartnerOperations';
+import PartnerGovernance from './pages/PartnerGovernance';
 
 function Guard() {
   return getUser() ? <Layout /> : <Navigate to="/login" replace />;
@@ -53,6 +64,10 @@ function HomeRoute() {
 
   if (!user) {
     return <Navigate to="/login" replace />;
+  }
+
+  if (user.role === 'partner') {
+    return <Navigate to="/partner" replace />;
   }
 
   if (
@@ -141,6 +156,10 @@ const protect = (permission, element) => (
 export default function App() {
   return (
     <Routes>
+      <Route path="/partner/login" element={<PartnerLogin />} />
+      <Route path="/partner" element={<PartnerPortal />} />
+      <Route path="/frontdesk/login" element={<FrontdeskLogin />} />
+      <Route path="/frontdesk" element={<FrontdeskApp />} />
       <Route
         path="/login"
         element={
@@ -176,7 +195,25 @@ export default function App() {
           <Route path="payments" element={<Payments />} />
           <Route path="approvals" element={<Approvals />} />
           <Route path="reports" element={<FinanceReports />} />
+          <Route path="collections" element={<CollectionAdmin />} />
+          <Route path="collections/customers" element={<Collections />} />
+          <Route path="investors" element={<Investors />} />
         </Route>
+
+        <Route
+          path="/partner-operations"
+          element={getUser()?.role === 'group_admin' ? <PartnerOperations /> : <Navigate to="/" replace />}
+        />
+
+        <Route
+          path="/partners"
+          element={getUser()?.role === 'group_admin' ? <PartnerAdmin /> : <Navigate to="/" replace />}
+        />
+
+        <Route
+          path="/partner-governance"
+          element={getUser()?.role === 'group_admin' ? <PartnerGovernance /> : <Navigate to="/" replace />}
+        />
 
         <Route
           path="/people"
@@ -290,6 +327,11 @@ export default function App() {
             'audit.view',
             <DataModule type="audit" />
           )}
+        />
+
+        <Route
+          path="/programming"
+          element={getUser()?.role === 'group_admin' ? <Programming /> : <Navigate to="/" replace />}
         />
 
         <Route

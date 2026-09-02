@@ -7,7 +7,8 @@ import {
   HandCoins,
   ShieldCheck,
   BarChart3,
-  BadgeIndianRupee
+  BadgeIndianRupee,
+  CircleDollarSign
 } from 'lucide-react';
 
 import './finance.css';
@@ -20,6 +21,8 @@ const tabs = [
   ['Payments', '/finance/payments', HandCoins],
   ['Approvals', '/finance/approvals', ShieldCheck],
   ['Reports', '/finance/reports', BarChart3]
+  ,['Collection Control', '/finance/collections', HandCoins]
+  ,['Investors', '/finance/investors', CircleDollarSign]
 ];
 
 export default function FinanceLayout() {

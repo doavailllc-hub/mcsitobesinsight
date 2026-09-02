@@ -48,6 +48,15 @@ const fileUpload = multer({
   }
 });
 
+const logoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 3 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml'];
+    cb(allowed.includes(file.mimetype) ? null : new Error('Logo must be a PNG, JPG, WebP or SVG image'), allowed.includes(file.mimetype));
+  }
+});
+
 const app = express();
 app.use(cors({
   origin: (process.env.CLIENT_URL || 'http://localhost:5173').split(',').map(x => x.trim()),
@@ -74,6 +83,18 @@ const audit = async (req, action, entityType, entityName) => {
      VALUES (?,?,?,?,?)`,
     [req.user?.id || null, action, entityType, entityName, req.ip]
   );
+};
+
+const notifyUser = async (userId,title,message,type='info',targetPath=null,dedupeKey=null) => {
+  if(!userId)return;
+  await q(`INSERT INTO notifications(user_id,title,message,type,target_path,dedupe_key) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id`,[userId,title,message,type,targetPath,dedupeKey]);
+};
+const notifyRole = async (role,title,message,type='info',targetPath=null,dedupeKey=null) => {
+  await q(`INSERT INTO notifications(user_id,title,message,type,target_path,dedupe_key) SELECT id,?,?,?,?,? FROM users WHERE role=? AND status='active' ON DUPLICATE KEY UPDATE id=id`,[title,message,type,targetPath,dedupeKey,role]);
+};
+const notifyPartner = async (partnerId,title,message,type='info',targetPath='/partner',dedupeKey=null) => {
+  const [profile]=await q('SELECT user_id FROM partner_profiles WHERE id=?',[partnerId]);
+  if(profile)await notifyUser(profile.user_id,title,message,type,targetPath,dedupeKey);
 };
 
 const encryptSecret = value => {
@@ -514,6 +535,34 @@ app.post('/api/auth/login', safe(async (req, res) => {
   res.json({ token, user: { id: u.id, name: u.name, email: u.email, role: u.role } });
 }));
 
+app.post('/api/auth/frontdesk-login', safe(async (req, res) => {
+  const email = text(req.body?.email).toLowerCase();
+  const password = String(req.body?.password || '');
+  const [u] = await q(
+    `SELECT * FROM users
+     WHERE email=? AND role='frontdesk' AND status='active' LIMIT 1`,
+    [email]
+  );
+  if (!u || !await bcrypt.compare(password, u.password_hash)) {
+    return res.status(401).json({ message: 'Invalid front-desk email or password' });
+  }
+  const token = jwt.sign(
+    { id: u.id, email: u.email, role: u.role },
+    process.env.JWT_SECRET || 'dev-secret',
+    { expiresIn: '12h' }
+  );
+  await q(`INSERT INTO frontdesk_login_history (user_id,ip_address,user_agent) VALUES (?,?,?)`, [u.id,req.ip,text(req.headers['user-agent']).slice(0,500)]).catch(() => {});
+  res.json({ token, user: { id: u.id, name: u.name, email: u.email, role: u.role } });
+}));
+
+app.post('/api/auth/partner-login', safe(async (req,res)=>{
+  const email=text(req.body?.email).toLowerCase(),password=String(req.body?.password||'');
+  const [u]=await q(`SELECT u.*,pp.id partner_id,pp.status partner_status FROM users u JOIN partner_profiles pp ON pp.user_id=u.id WHERE u.email=? AND u.role='partner' AND u.status='active' LIMIT 1`,[email]);
+  if(!u||u.partner_status!=='active'||!await bcrypt.compare(password,u.password_hash))return res.status(401).json({message:'Invalid partner email or password'});
+  const token=jwt.sign({id:u.id,email:u.email,role:'partner',partner_id:u.partner_id},process.env.JWT_SECRET||'dev-secret',{expiresIn:'12h'});
+  res.json({token,user:{id:u.id,name:u.name,email:u.email,role:'partner',partner_id:u.partner_id}});
+}));
+
 app.post('/api/auth/register', safe(async (req, res) => {
   const name = text(req.body?.name);
   const email = text(req.body?.email).toLowerCase();
@@ -562,6 +611,10 @@ app.get('/api/auth/me', safe(async (req, res) => {
     company_access: access.companyAccess
   });
 }));
+
+app.get('/api/notifications',safe(async(req,res)=>{if(req.user.role==='frontdesk'){const [due]=await q(`SELECT COUNT(*) count FROM collection_customers WHERE status='active' AND next_interest_date<=CURDATE()`);if(Number(due?.count)>0)await notifyUser(req.user.id,'Collections need attention',`${due.count} customer account${Number(due.count)===1?' is':'s are'} due or overdue today.`,'warning','/frontdesk',`frontdesk-due-${req.user.id}-${new Date().toISOString().slice(0,10)}`);}const rows=await q(`SELECT id,title,message,type,target_path,is_read,created_at,read_at FROM notifications WHERE user_id=? ORDER BY is_read,created_at DESC LIMIT 50`,[req.user.id]);const [{count}]=await q('SELECT COUNT(*) count FROM notifications WHERE user_id=? AND is_read=0',[req.user.id]);res.json({notifications:rows,unread:Number(count)});}));
+app.patch('/api/notifications/:id/read',safe(async(req,res)=>{await q('UPDATE notifications SET is_read=1,read_at=COALESCE(read_at,NOW()) WHERE id=? AND user_id=?',[req.params.id,req.user.id]);res.json({ok:true});}));
+app.post('/api/notifications/read-all',safe(async(req,res)=>{await q('UPDATE notifications SET is_read=1,read_at=COALESCE(read_at,NOW()) WHERE user_id=? AND is_read=0',[req.user.id]);res.json({ok:true});}));
 
 
 // ---------- USERS & ACCESS MANAGEMENT ----------
@@ -1315,9 +1368,8 @@ app.get(
     const access = req.access || await buildUserAccess(req.user);
 
     if (access.globalRole === 'group_admin') {
-      return res.json(
-        await q(`SELECT * FROM companies WHERE is_parent=0 ORDER BY name`)
-      );
+      const rows = await q(`SELECT * FROM companies WHERE is_parent=0 ORDER BY name`);
+      return res.json(await Promise.all(rows.map(withCompanyLogoUrl)));
     }
 
     const companyIds = companyIdsFromAccess(access);
@@ -1325,16 +1377,15 @@ app.get(
 
     const placeholders = companyIds.map(() => '?').join(',');
 
-    res.json(
-      await q(
+    const rows = await q(
         `SELECT *
          FROM companies
          WHERE is_parent=0
            AND id IN (${placeholders})
          ORDER BY name`,
         companyIds
-      )
-    );
+      );
+    res.json(await Promise.all(rows.map(withCompanyLogoUrl)));
   })
 );
 
@@ -1513,7 +1564,30 @@ app.get(
       [companyId]
     );
 
-    res.json({ company, shareholders, products });
+    res.json({ company: await withCompanyLogoUrl(company), shareholders, products });
+  })
+);
+
+app.post(
+  '/api/companies/:id/logo',
+  requireEffectivePermission('companies.manage'),
+  logoUpload.single('logo'),
+  safe(async (req, res) => {
+    if (!requireS3(req, res)) return;
+    const companyId = Number(req.params.id);
+    const access = req.access || await buildUserAccess(req.user);
+    if (!hasEffectivePermission(access, 'companies.manage', companyId)) {
+      return res.status(403).json({ message: 'You do not have access to manage this company.' });
+    }
+    const [company] = await q('SELECT id,name,logo_storage_key FROM companies WHERE id=? AND is_parent=0', [companyId]);
+    if (!company) return res.status(404).json({ message: 'Company not found' });
+    if (!req.file) return res.status(400).json({ message: 'Select a logo image' });
+    const key = `insight/company-${companyId}/branding/${Date.now()}-${crypto.randomUUID()}-${safeFileName(req.file.originalname)}`;
+    await s3.send(new PutObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key, Body: req.file.buffer, ContentType: req.file.mimetype }));
+    await q('UPDATE companies SET logo_storage_key=? WHERE id=?', [key, companyId]);
+    if (company.logo_storage_key) await s3.send(new DeleteObjectCommand({ Bucket: process.env.S3_BUCKET, Key: company.logo_storage_key })).catch(() => {});
+    await audit(req, 'Updated company logo', 'company', company.name);
+    res.json(await withCompanyLogoUrl({ ...company, logo_storage_key: key }));
   })
 );
 
@@ -2075,6 +2149,12 @@ const safeFileName = name =>
 
 const s3KeyFor = (companyId, folderId, originalName) =>
   `insight/company-${companyId}/${folderId ? `folder-${folderId}/` : 'root/'}${Date.now()}-${crypto.randomUUID()}-${safeFileName(originalName)}`;
+
+const withCompanyLogoUrl = async company => {
+  if (!company?.logo_storage_key || !process.env.S3_BUCKET) return company;
+  const command = new GetObjectCommand({ Bucket: process.env.S3_BUCKET, Key: company.logo_storage_key, ResponseContentDisposition: 'inline' });
+  return { ...company, logo_url: await getSignedUrl(s3, command, { expiresIn: 900 }) };
+};
 
 const signedFileUrls = async row => {
   if (!row.storage_key || !process.env.S3_BUCKET) return row;
@@ -3025,6 +3105,148 @@ for (const [path, cfg] of Object.entries(crud)) {
     })
   );
 }
+
+// ---------- GROUP ADMIN PROGRAM REGISTRY ----------
+
+const verifyCurrentAdminPassword = async (req, password) => {
+  const [user] = await q(`SELECT id,password_hash,role,status FROM users WHERE id=?`, [req.user.id]);
+  return Boolean(user && user.role === 'group_admin' && user.status === 'active' && await bcrypt.compare(String(password || ''), user.password_hash));
+};
+
+app.get('/api/program-registry', requireGroupAdmin, safe(async (req, res) => {
+  res.json(await q(
+    `SELECT pr.id,pr.program_name,pr.environment,pr.status,pr.public_url,pr.git_url,pr.git_branch,
+            pr.server_host,pr.ssh_user,pr.ssh_port,pr.deployment_path,pr.process_manager,pr.notes,
+            (pr.encrypted_pem IS NOT NULL) has_pem,(pr.encrypted_env IS NOT NULL) has_env,
+            pr.created_at,pr.updated_at,cu.name created_by_name,uu.name updated_by_name
+     FROM program_registry pr LEFT JOIN users cu ON cu.id=pr.created_by LEFT JOIN users uu ON uu.id=pr.updated_by
+     ORDER BY pr.status='active' DESC,pr.program_name,pr.environment`
+  ));
+}));
+
+app.post('/api/program-registry', requireGroupAdmin, safe(async (req, res) => {
+  const name = text(req.body.program_name);
+  const environment = text(req.body.environment) || 'production';
+  if (!name) return res.status(400).json({ message: 'Program name is required.' });
+  try {
+    const result = await q(
+      `INSERT INTO program_registry
+       (program_name,environment,status,public_url,git_url,git_branch,server_host,ssh_user,ssh_port,deployment_path,process_manager,encrypted_pem,encrypted_env,notes,created_by,updated_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [name,environment,text(req.body.status)||'active',text(req.body.public_url),text(req.body.git_url),text(req.body.git_branch),text(req.body.server_host),text(req.body.ssh_user),number(req.body.ssh_port,22)||22,text(req.body.deployment_path),text(req.body.process_manager),encryptSecret(req.body.pem_key),encryptSecret(req.body.env_content),text(req.body.notes),req.user.id,req.user.id]
+    );
+    await audit(req,'Created protected program record','program_registry',`${name} (${environment})`);
+    res.status(201).json({ id: result.insertId });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'This program and environment already exist.' });
+    throw err;
+  }
+}));
+
+app.put('/api/program-registry/:id', requireGroupAdmin, safe(async (req, res) => {
+  const [existing] = await q('SELECT * FROM program_registry WHERE id=?',[req.params.id]);
+  if (!existing) return res.status(404).json({ message: 'Program record not found.' });
+  const name=text(req.body.program_name),environment=text(req.body.environment)||'production';
+  if (!name) return res.status(400).json({ message: 'Program name is required.' });
+  const pem = text(req.body.pem_key) ? encryptSecret(req.body.pem_key) : existing.encrypted_pem;
+  const env = text(req.body.env_content) ? encryptSecret(req.body.env_content) : existing.encrypted_env;
+  await q(
+    `UPDATE program_registry SET program_name=?,environment=?,status=?,public_url=?,git_url=?,git_branch=?,server_host=?,ssh_user=?,ssh_port=?,deployment_path=?,process_manager=?,encrypted_pem=?,encrypted_env=?,notes=?,updated_by=? WHERE id=?`,
+    [name,environment,text(req.body.status)||'active',text(req.body.public_url),text(req.body.git_url),text(req.body.git_branch),text(req.body.server_host),text(req.body.ssh_user),number(req.body.ssh_port,22)||22,text(req.body.deployment_path),text(req.body.process_manager),pem,env,text(req.body.notes),req.user.id,existing.id]
+  );
+  await audit(req,'Updated protected program record','program_registry',`${name} (${environment})`);
+  res.json({ ok:true });
+}));
+
+app.post('/api/program-registry/:id/reveal', requireGroupAdmin, safe(async (req, res) => {
+  const field = req.body.field === 'pem_key' ? 'pem_key' : req.body.field === 'env_content' ? 'env_content' : null;
+  if (!field) return res.status(400).json({ message: 'A valid protected field is required.' });
+  if (!await verifyCurrentAdminPassword(req,req.body.password)) return res.status(401).json({ message: 'Your Group Admin password is incorrect.' });
+  const [row] = await q('SELECT id,program_name,environment,encrypted_pem,encrypted_env FROM program_registry WHERE id=?',[req.params.id]);
+  if (!row) return res.status(404).json({ message: 'Program record not found.' });
+  const encrypted = field === 'pem_key' ? row.encrypted_pem : row.encrypted_env;
+  await audit(req,`Revealed protected ${field === 'pem_key' ? 'PEM key' : 'environment configuration'}`,'program_registry',`${row.program_name} (${row.environment})`);
+  res.set('Cache-Control','no-store, private, max-age=0');
+  res.set('Pragma','no-cache');
+  res.json({ value: encrypted ? decryptSecret(encrypted) : '' });
+}));
+
+app.post('/api/program-registry/:id/archive', requireGroupAdmin, safe(async (req, res) => {
+  if (!await verifyCurrentAdminPassword(req,req.body.password)) return res.status(401).json({ message: 'Your Group Admin password is incorrect.' });
+  const [row]=await q('SELECT id,program_name,environment FROM program_registry WHERE id=?',[req.params.id]);
+  if(!row)return res.status(404).json({message:'Program record not found.'});
+  await q(`UPDATE program_registry SET status='archived',updated_by=? WHERE id=?`,[req.user.id,row.id]);
+  await audit(req,'Archived protected program record','program_registry',`${row.program_name} (${row.environment})`);
+  res.json({ok:true});
+}));
+
+// ---------- PARTNER MANAGEMENT AND PORTAL ----------
+
+const requirePartner = (req,res,next) => req.user?.role === 'partner' && req.user?.partner_id ? next() : res.status(403).json({message:'Partner portal access is required.'});
+
+app.get('/api/partner-admin/overview',requireGroupAdmin,safe(async(req,res)=>{
+  const partners=await q(`SELECT pp.id,pp.status,p.id person_id,p.name,p.position,p.email,p.phone,u.email login_email,u.status login_status,
+    COUNT(DISTINCT pca.company_id) company_count,COALESCE(SUM(DISTINCT pca.ownership_percent),0) ownership_total,
+    COALESCE((SELECT SUM(pi.amount) FROM partner_investments pi WHERE pi.partner_id=pp.id),0) invested_total,
+    COALESCE((SELECT COUNT(*) FROM partner_tasks pt WHERE pt.partner_id=pp.id AND pt.status<>'completed'),0) open_tasks
+    FROM partner_profiles pp JOIN people p ON p.id=pp.person_id JOIN users u ON u.id=pp.user_id
+    LEFT JOIN partner_company_access pca ON pca.partner_id=pp.id GROUP BY pp.id,p.id,u.id ORDER BY p.name`);
+  res.json({partners,people:await q(`SELECT id,name,email,position FROM people ORDER BY name`),companies:await q(`SELECT id,name,currency FROM companies WHERE status='active' AND is_parent=0 ORDER BY name`)});
+}));
+
+app.get('/api/partner-admin/withdrawals',requireGroupAdmin,safe(async(req,res)=>{const rows=await q(`SELECT pwr.*,p.name partner_name,c.name company_name,c.currency,u.name reviewed_by_name FROM partner_withdrawal_requests pwr JOIN partner_profiles pp ON pp.id=pwr.partner_id JOIN people p ON p.id=pp.person_id JOIN companies c ON c.id=pwr.company_id LEFT JOIN users u ON u.id=pwr.reviewed_by ORDER BY FIELD(pwr.status,'pending','approved','paid','rejected','cancelled'),pwr.created_at DESC`);res.json(rows);}));
+
+app.patch('/api/partner-admin/withdrawals/:id',requireGroupAdmin,safe(async(req,res)=>{const status=['approved','rejected','paid'].includes(req.body.status)?req.body.status:null;if(!status)return res.status(400).json({message:'Valid withdrawal decision is required.'});const [row]=await q('SELECT * FROM partner_withdrawal_requests WHERE id=?',[req.params.id]);if(!row)return res.status(404).json({message:'Withdrawal request not found.'});const allowed=(row.status==='pending'&&['approved','rejected'].includes(status))||(row.status==='approved'&&status==='paid');if(!allowed)return res.status(409).json({message:`A ${row.status} request cannot be changed to ${status}.`});if(status==='paid'){const [balance]=await q(`SELECT COALESCE((SELECT SUM(amount) FROM partner_investments WHERE partner_id=? AND company_id=?),0)-COALESCE((SELECT SUM(amount) FROM partner_withdrawal_requests WHERE partner_id=? AND company_id=? AND status='paid'),0) available`,[row.partner_id,row.company_id,row.partner_id,row.company_id]);if(Number(row.amount)>Number(balance.available))return res.status(409).json({message:'Available partner capital is no longer sufficient for this payment.'});}await q(`UPDATE partner_withdrawal_requests SET status=?,admin_notes=?,reviewed_by=?,reviewed_at=NOW(),paid_at=IF(?='paid',NOW(),paid_at) WHERE id=?`,[status,text(req.body.admin_notes),req.user.id,status,row.id]);await audit(req,`${status[0].toUpperCase()+status.slice(1)} partner withdrawal request`,'partner_withdrawal',String(row.id));await notifyPartner(row.partner_id,`Withdrawal ${status}`,`Your withdrawal request has been ${status}.`,status==='rejected'?'error':'success','/partner',`withdrawal-${row.id}-${status}`);res.json({ok:true});}));
+
+app.get('/api/partner-admin/meetings',requireGroupAdmin,safe(async(req,res)=>{const meetings=await q(`SELECT pm.*,c.name company_name,u.name created_by_name,COUNT(pmr.id) recipient_count,SUM(pmr.response_status<>'pending') response_count,SUM(pmr.response_status='approved') approved_count,SUM(pmr.response_status='rejected') rejected_count FROM partner_meetings pm JOIN companies c ON c.id=pm.company_id LEFT JOIN users u ON u.id=pm.created_by LEFT JOIN partner_meeting_responses pmr ON pmr.meeting_id=pm.id GROUP BY pm.id,c.id,u.id ORDER BY pm.scheduled_at DESC,pm.id DESC`);const responses=await q(`SELECT pmr.*,p.name partner_name FROM partner_meeting_responses pmr JOIN partner_profiles pp ON pp.id=pmr.partner_id JOIN people p ON p.id=pp.person_id ORDER BY pmr.responded_at DESC,p.name`);res.json({meetings,responses});}));
+
+app.post('/api/partner-admin/meetings',requireGroupAdmin,safe(async(req,res)=>{const companyId=Number(req.body.company_id),title=text(req.body.title),scheduled=text(req.body.scheduled_at),action=['acknowledgement','approval'].includes(req.body.action_type)?req.body.action_type:'acknowledgement',status=req.body.status==='published'?'published':'draft';if(!companyId||!title||!scheduled)return res.status(400).json({message:'Company, meeting title and scheduled date are required.'});const conn=await pool.getConnection();try{await conn.beginTransaction();const [result]=await conn.query(`INSERT INTO partner_meetings(company_id,title,meeting_type,scheduled_at,location,agenda,minutes,resolution_text,action_type,response_due_date,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,[companyId,title,text(req.body.meeting_type)||'Partner meeting',scheduled,text(req.body.location),text(req.body.agenda),text(req.body.minutes),text(req.body.resolution_text),action,nullable(req.body.response_due_date),status,req.user.id]);if(status==='published')await conn.query(`INSERT IGNORE INTO partner_meeting_responses(meeting_id,partner_id) SELECT ?,pca.partner_id FROM partner_company_access pca JOIN partner_profiles pp ON pp.id=pca.partner_id WHERE pca.company_id=? AND pp.status='active'`,[result.insertId,companyId]);await conn.commit();await audit(req,`${status==='published'?'Published':'Created draft'} partner meeting`,'partner_meeting',String(result.insertId));if(status==='published')await q(`INSERT INTO notifications(user_id,title,message,type,target_path,dedupe_key) SELECT pp.user_id,'New meeting or decision',?,'action','/partner',CONCAT('meeting-',?,'-',pp.user_id) FROM partner_meeting_responses pmr JOIN partner_profiles pp ON pp.id=pmr.partner_id WHERE pmr.meeting_id=? ON DUPLICATE KEY UPDATE id=id`,[title,result.insertId,result.insertId]);res.status(201).json({id:result.insertId});}catch(err){await conn.rollback();throw err}finally{conn.release()}}));
+
+app.patch('/api/partner-admin/meetings/:id',requireGroupAdmin,safe(async(req,res)=>{const [meeting]=await q('SELECT * FROM partner_meetings WHERE id=?',[req.params.id]);if(!meeting)return res.status(404).json({message:'Meeting record not found.'});const status=['draft','published','closed'].includes(req.body.status)?req.body.status:meeting.status;if(meeting.status==='closed')return res.status(409).json({message:'A closed meeting record cannot be changed.'});const conn=await pool.getConnection();try{await conn.beginTransaction();await conn.query(`UPDATE partner_meetings SET minutes=?,resolution_text=?,status=?,updated_by=? WHERE id=?`,[req.body.minutes===undefined?meeting.minutes:text(req.body.minutes),req.body.resolution_text===undefined?meeting.resolution_text:text(req.body.resolution_text),status,req.user.id,meeting.id]);if(status==='published')await conn.query(`INSERT IGNORE INTO partner_meeting_responses(meeting_id,partner_id) SELECT ?,pca.partner_id FROM partner_company_access pca JOIN partner_profiles pp ON pp.id=pca.partner_id WHERE pca.company_id=? AND pp.status='active'`,[meeting.id,meeting.company_id]);await conn.commit();await audit(req,`${status==='published'?'Published':status==='closed'?'Closed':'Updated'} partner meeting`,'partner_meeting',String(meeting.id));if(status==='published')await q(`INSERT INTO notifications(user_id,title,message,type,target_path,dedupe_key) SELECT pp.user_id,'New meeting or decision',?,'action','/partner',CONCAT('meeting-',?,'-',pp.user_id) FROM partner_meeting_responses pmr JOIN partner_profiles pp ON pp.id=pmr.partner_id WHERE pmr.meeting_id=? ON DUPLICATE KEY UPDATE id=id`,[meeting.title,meeting.id,meeting.id]);res.json({ok:true});}catch(err){await conn.rollback();throw err}finally{conn.release()}}));
+
+app.post('/api/partner-admin/accounts',requireGroupAdmin,safe(async(req,res)=>{
+  const personId=Number(req.body.person_id),email=text(req.body.email).toLowerCase(),password=String(req.body.password||'');
+  if(!personId||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||password.length<8)return res.status(400).json({message:'Person, valid email and password of at least 8 characters are required.'});
+  const [person]=await q('SELECT * FROM people WHERE id=?',[personId]);if(!person)return res.status(404).json({message:'Key person not found.'});
+  const conn=await pool.getConnection();try{await conn.beginTransaction();const [userResult]=await conn.query(`INSERT INTO users(name,email,password_hash,role,status) VALUES (?,?,?,'partner','active')`,[person.name,email,await bcrypt.hash(password,12)]);const [profileResult]=await conn.query(`INSERT INTO partner_profiles(person_id,user_id,status) VALUES (?,?,'active')`,[person.id,userResult.insertId]);await conn.commit();await audit(req,'Created partner portal account','partner_profile',person.name);res.status(201).json({id:profileResult.insertId});}catch(err){await conn.rollback();if(err.code==='ER_DUP_ENTRY')return res.status(409).json({message:'This person or login email already has an account.'});throw err;}finally{conn.release();}
+}));
+
+app.get('/api/partner-admin/:id',requireGroupAdmin,safe(async(req,res)=>{
+  const [partner]=await q(`SELECT pp.id,pp.status,p.id person_id,p.name,p.position,p.email,p.phone,u.email login_email,u.status login_status FROM partner_profiles pp JOIN people p ON p.id=pp.person_id JOIN users u ON u.id=pp.user_id WHERE pp.id=?`,[req.params.id]);
+  if(!partner)return res.status(404).json({message:'Partner account not found.'});
+  const companies=await q(`SELECT pca.*,c.name company_name,c.currency,COALESCE((SELECT SUM(pi.amount) FROM partner_investments pi WHERE pi.partner_id=pca.partner_id AND pi.company_id=pca.company_id),0) invested_total FROM partner_company_access pca JOIN companies c ON c.id=pca.company_id WHERE pca.partner_id=? ORDER BY c.name`,[partner.id]);
+  const investments=await q(`SELECT pi.*,c.name company_name,u.name created_by_name FROM partner_investments pi JOIN companies c ON c.id=pi.company_id LEFT JOIN users u ON u.id=pi.created_by WHERE pi.partner_id=? ORDER BY pi.investment_date DESC,pi.id DESC`,[partner.id]);
+  const tasks=await q(`SELECT pt.*,c.name company_name,u.name assigned_by_name FROM partner_tasks pt LEFT JOIN companies c ON c.id=pt.company_id LEFT JOIN users u ON u.id=pt.created_by WHERE pt.partner_id=? ORDER BY pt.status='completed',pt.due_date,pt.id DESC`,[partner.id]);
+  const companyIds=companies.map(item=>Number(item.company_id));const ph=companyIds.map(()=>'?').join(',');
+  const assets=companyIds.length?await q(`SELECT a.*,c.name company_name,c.currency FROM assets a JOIN companies c ON c.id=a.company_id WHERE a.company_id IN (${ph}) ORDER BY a.purchase_date DESC,a.id DESC`,companyIds):[];
+  const transactions=companyIds.length?await q(`SELECT ft.*,c.name company_name FROM finance_transactions ft JOIN companies c ON c.id=ft.company_id WHERE ft.company_id IN (${ph}) ORDER BY ft.date DESC,ft.id DESC LIMIT 50`,companyIds):[];
+  const withdrawals=await q(`SELECT pwr.*,c.name company_name,c.currency,u.name reviewed_by_name FROM partner_withdrawal_requests pwr JOIN companies c ON c.id=pwr.company_id LEFT JOIN users u ON u.id=pwr.reviewed_by WHERE pwr.partner_id=? ORDER BY pwr.created_at DESC`,[partner.id]);
+  res.json({partner,companies,investments,tasks,assets,transactions,withdrawals});
+}));
+
+app.post('/api/partner-admin/:id/companies',requireGroupAdmin,safe(async(req,res)=>{const partnerId=Number(req.params.id),companyId=Number(req.body.company_id);if(!companyId)return res.status(400).json({message:'Company is required.'});await q(`INSERT INTO partner_company_access(partner_id,company_id,relationship_type,ownership_percent,notes) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE relationship_type=VALUES(relationship_type),ownership_percent=VALUES(ownership_percent),notes=VALUES(notes)`,[partnerId,companyId,text(req.body.relationship_type)||'Partner',number(req.body.ownership_percent),text(req.body.notes)]);await audit(req,'Updated partner company relationship','partner_profile',String(partnerId));res.status(201).json({ok:true});}));
+
+app.post('/api/partner-admin/:id/investments',requireGroupAdmin,safe(async(req,res)=>{const partnerId=Number(req.params.id),companyId=Number(req.body.company_id),amount=number(req.body.amount),date=text(req.body.investment_date);const [access]=await q('SELECT id FROM partner_company_access WHERE partner_id=? AND company_id=?',[partnerId,companyId]);if(!access)return res.status(400).json({message:'Assign this company to the partner before recording investment.'});if(amount<=0||!/^\d{4}-\d{2}-\d{2}$/.test(date))return res.status(400).json({message:'Valid investment amount and date are required.'});const result=await q(`INSERT INTO partner_investments(partner_id,company_id,investment_date,investment_type,amount,currency,reference_no,notes,created_by) VALUES (?,?,?,?,?,?,?,?,?)`,[partnerId,companyId,date,text(req.body.investment_type)||'Capital contribution',amount,text(req.body.currency)||'INR',text(req.body.reference_no),text(req.body.notes),req.user.id]);await audit(req,'Recorded partner investment','partner_investment',String(result.insertId));res.status(201).json({id:result.insertId});}));
+
+app.post('/api/partner-admin/:id/tasks',requireGroupAdmin,safe(async(req,res)=>{const title=text(req.body.title);if(!title)return res.status(400).json({message:'Task title is required.'});const companyId=Number(req.body.company_id)||null;if(companyId){const [access]=await q('SELECT id FROM partner_company_access WHERE partner_id=? AND company_id=?',[req.params.id,companyId]);if(!access)return res.status(400).json({message:'Task company must be assigned to this partner.'});}const result=await q(`INSERT INTO partner_tasks(partner_id,company_id,title,description,due_date,priority,status,created_by) VALUES (?,?,?,?,?,?,?,?)`,[req.params.id,companyId,title,text(req.body.description),nullable(req.body.due_date),text(req.body.priority)||'Medium','pending',req.user.id]);await audit(req,'Assigned partner task','partner_task',title);await notifyPartner(req.params.id,'New task assigned',title,'info','/partner',`partner-task-${result.insertId}`);res.status(201).json({id:result.insertId});}));
+
+app.post('/api/partner-admin/:id/reset-password',requireGroupAdmin,safe(async(req,res)=>{const password=String(req.body.password||'');if(password.length<8)return res.status(400).json({message:'Password must contain at least 8 characters.'});const [partner]=await q('SELECT user_id FROM partner_profiles WHERE id=?',[req.params.id]);if(!partner)return res.status(404).json({message:'Partner not found.'});await q('UPDATE users SET password_hash=? WHERE id=?',[await bcrypt.hash(password,12),partner.user_id]);await audit(req,'Reset partner portal password','partner_profile',String(req.params.id));res.json({ok:true});}));
+
+app.get('/api/partner/overview',requirePartner,safe(async(req,res)=>{const partnerId=req.user.partner_id;const [profile]=await q(`SELECT pp.id,p.name,p.position,p.email,p.phone FROM partner_profiles pp JOIN people p ON p.id=pp.person_id WHERE pp.id=? AND pp.status='active'`,[partnerId]);if(!profile)return res.status(403).json({message:'Partner account is inactive.'});const companies=await q(`SELECT pca.company_id,pca.relationship_type,pca.ownership_percent,pca.notes,c.name company_name,c.currency,COALESCE((SELECT SUM(pi.amount) FROM partner_investments pi WHERE pi.partner_id=pca.partner_id AND pi.company_id=pca.company_id),0) invested_total,COALESCE((SELECT SUM(w.amount) FROM partner_withdrawal_requests w WHERE w.partner_id=pca.partner_id AND w.company_id=pca.company_id AND w.status='paid'),0) withdrawn_total,COALESCE((SELECT SUM(w.amount) FROM partner_withdrawal_requests w WHERE w.partner_id=pca.partner_id AND w.company_id=pca.company_id AND w.status IN ('pending','approved')),0) reserved_total,COALESCE((SELECT COUNT(*) FROM assets a WHERE a.company_id=c.id),0) asset_count,COALESCE((SELECT SUM(a.purchase_cost) FROM assets a WHERE a.company_id=c.id),0) asset_value FROM partner_company_access pca JOIN companies c ON c.id=pca.company_id WHERE pca.partner_id=? ORDER BY c.name`,[partnerId]);const investments=await q(`SELECT pi.*,c.name company_name FROM partner_investments pi JOIN companies c ON c.id=pi.company_id WHERE pi.partner_id=? ORDER BY pi.investment_date DESC,pi.id DESC`,[partnerId]);const withdrawals=await q(`SELECT pwr.*,c.name company_name,c.currency FROM partner_withdrawal_requests pwr JOIN companies c ON c.id=pwr.company_id WHERE pwr.partner_id=? ORDER BY pwr.created_at DESC`,[partnerId]);const tasks=await q(`SELECT pt.*,c.name company_name FROM partner_tasks pt LEFT JOIN companies c ON c.id=pt.company_id WHERE pt.partner_id=? ORDER BY pt.status='completed',pt.due_date,pt.id DESC`,[partnerId]);const ids=companies.map(x=>Number(x.company_id)),ph=ids.map(()=>'?').join(',');const assets=ids.length?await q(`SELECT a.*,c.name company_name,c.currency FROM assets a JOIN companies c ON c.id=a.company_id WHERE a.company_id IN (${ph}) ORDER BY a.purchase_date DESC,a.id DESC`,ids):[];const transactions=ids.length?await q(`SELECT ft.*,c.name company_name FROM finance_transactions ft JOIN companies c ON c.id=ft.company_id WHERE ft.company_id IN (${ph}) ORDER BY ft.date DESC,ft.id DESC LIMIT 25`,ids):[];res.json({profile,companies,investments,withdrawals,tasks,assets,recent_transactions:transactions});}));
+
+app.post('/api/partner/withdrawals',requirePartner,safe(async(req,res)=>{const partnerId=req.user.partner_id,companyId=Number(req.body.company_id),amount=number(req.body.amount),method=text(req.body.payment_method)||'Bank transfer',reason=text(req.body.reason);if(!companyId||amount<=0||reason.length<5)return res.status(400).json({message:'Company, valid amount and a short reason are required.'});const [position]=await q(`SELECT pca.id,c.currency,c.name company_name,COALESCE((SELECT SUM(amount) FROM partner_investments WHERE partner_id=pca.partner_id AND company_id=pca.company_id),0)-COALESCE((SELECT SUM(amount) FROM partner_withdrawal_requests WHERE partner_id=pca.partner_id AND company_id=pca.company_id AND status IN ('pending','approved','paid')),0) available FROM partner_company_access pca JOIN companies c ON c.id=pca.company_id WHERE pca.partner_id=? AND pca.company_id=?`,[partnerId,companyId]);if(!position)return res.status(403).json({message:'You do not have access to this company.'});if(amount>Number(position.available))return res.status(409).json({message:'Requested amount exceeds your available capital after existing requests.'});const result=await q(`INSERT INTO partner_withdrawal_requests(partner_id,company_id,amount,currency,payment_method,reason,status) VALUES (?,?,?,?,?,?,'pending')`,[partnerId,companyId,amount,position.currency,method,reason]);await audit(req,'Submitted partner withdrawal request','partner_withdrawal',String(result.insertId));await notifyRole('group_admin','New withdrawal request',`${req.user.name||'A partner'} requested ${position.currency} ${amount} from ${position.company_name}.`,'warning','/partner-operations',`withdrawal-request-${result.insertId}`);res.status(201).json({id:result.insertId});}));
+
+app.patch('/api/partner/withdrawals/:id/cancel',requirePartner,safe(async(req,res)=>{const result=await q(`UPDATE partner_withdrawal_requests SET status='cancelled' WHERE id=? AND partner_id=? AND status='pending'`,[req.params.id,req.user.partner_id]);if(!result.affectedRows)return res.status(409).json({message:'Only a pending withdrawal request can be cancelled.'});await audit(req,'Cancelled partner withdrawal request','partner_withdrawal',String(req.params.id));res.json({ok:true});}));
+
+app.get('/api/partner/meetings',requirePartner,safe(async(req,res)=>{const rows=await q(`SELECT pm.id,pm.title,pm.meeting_type,pm.scheduled_at,pm.location,pm.agenda,pm.minutes,pm.resolution_text,pm.action_type,pm.response_due_date,pm.status,c.name company_name,pmr.response_status,pmr.comment,pmr.responded_at FROM partner_meeting_responses pmr JOIN partner_meetings pm ON pm.id=pmr.meeting_id JOIN companies c ON c.id=pm.company_id WHERE pmr.partner_id=? AND pm.status IN ('published','closed') ORDER BY pm.status='published' DESC,pm.scheduled_at DESC,pm.id DESC`,[req.user.partner_id]);res.json(rows);}));
+
+app.post('/api/partner/meetings/:id/respond',requirePartner,safe(async(req,res)=>{const [row]=await q(`SELECT pm.title,pm.action_type,pm.status,pm.response_due_date,pmr.response_status FROM partner_meeting_responses pmr JOIN partner_meetings pm ON pm.id=pmr.meeting_id WHERE pmr.meeting_id=? AND pmr.partner_id=?`,[req.params.id,req.user.partner_id]);if(!row)return res.status(404).json({message:'Meeting or resolution is not assigned to you.'});if(row.status!=='published')return res.status(409).json({message:'This decision record is no longer open for response.'});if(row.response_status!=='pending')return res.status(409).json({message:'Your response has already been recorded.'});const response=row.action_type==='acknowledgement'?'acknowledged':(['approved','rejected'].includes(req.body.response_status)?req.body.response_status:null);if(!response)return res.status(400).json({message:'Approve or reject this resolution.'});await q(`UPDATE partner_meeting_responses SET response_status=?,comment=?,responded_at=NOW() WHERE meeting_id=? AND partner_id=?`,[response,text(req.body.comment),req.params.id,req.user.partner_id]);await audit(req,`${response[0].toUpperCase()+response.slice(1)} partner decision`,'partner_meeting',String(req.params.id));await notifyRole('group_admin','Partner decision received',`${req.user.name||'A partner'} ${response}: ${row.title}`,'info','/partner-governance',`meeting-response-${req.params.id}-${req.user.partner_id}`);res.json({ok:true});}));
+
+app.get('/api/partner/transactions',requirePartner,safe(async(req,res)=>{const partnerId=req.user.partner_id,companyId=Number(req.query.company_id),from=text(req.query.from),to=text(req.query.to);const [access]=await q('SELECT id FROM partner_company_access WHERE partner_id=? AND company_id=?',[partnerId,companyId]);if(!access)return res.status(403).json({message:'You do not have access to this company report.'});if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to))return res.status(400).json({message:'Valid report dates are required.'});const rows=await q(`SELECT ft.id,ft.date,ft.type,ft.category,ft.description,ft.amount,ft.currency FROM finance_transactions ft WHERE ft.company_id=? AND ft.date BETWEEN ? AND ? ORDER BY ft.date DESC,ft.id DESC`,[companyId,from,to]);const income=rows.filter(x=>x.type==='income').reduce((s,x)=>s+Number(x.amount),0),expense=rows.filter(x=>x.type==='expense').reduce((s,x)=>s+Number(x.amount),0);res.json({summary:{income,expense,net:income-expense,count:rows.length},transactions:rows});}));
+
+app.patch('/api/partner/tasks/:id',requirePartner,safe(async(req,res)=>{const status=['pending','in_progress','completed'].includes(req.body.status)?req.body.status:null;if(!status)return res.status(400).json({message:'Valid task status is required.'});const result=await q(`UPDATE partner_tasks SET status=? WHERE id=? AND partner_id=?`,[status,req.params.id,req.user.partner_id]);if(!result.affectedRows)return res.status(404).json({message:'Task not found.'});res.json({ok:true});}));
+
+app.put('/api/partner/change-password',requirePartner,safe(async(req,res)=>{const [user]=await q(`SELECT id,password_hash FROM users WHERE id=? AND role='partner' AND status='active'`,[req.user.id]);if(!user||!await bcrypt.compare(String(req.body.current_password||''),user.password_hash))return res.status(401).json({message:'Current password is incorrect.'});const next=String(req.body.new_password||'');if(next.length<8||!/[A-Z]/.test(next)||!/[a-z]/.test(next)||!/[0-9]/.test(next))return res.status(400).json({message:'New password must contain at least 8 characters, uppercase, lowercase and a number.'});if(await bcrypt.compare(next,user.password_hash))return res.status(400).json({message:'New password must be different from your current password.'});await q('UPDATE users SET password_hash=? WHERE id=?',[await bcrypt.hash(next,12),user.id]);await audit(req,'Changed partner portal password','partner_profile',String(req.user.partner_id));res.json({ok:true});}));
 
 // ---------- CREDENTIAL SECRET REVEAL ----------
 
@@ -5443,6 +5665,610 @@ app.get(
 );
 
 
+
+// ---------- MONTHLY INTEREST COLLECTIONS ----------
+
+const requireCollectionAccess = safe(async (req, res, next) => {
+  if (req.user?.role === 'frontdesk') return next();
+  const access = await buildUserAccess(req.user);
+  if (hasEffectivePermission(access, 'finance.view')) {
+    req.access = access;
+    return next();
+  }
+  return res.status(403).json({ message: 'Collection access is required.' });
+});
+
+const collectionCompanyIds = async req => {
+  if (req.user?.role === 'frontdesk') {
+    const rows = await q(
+      `SELECT id FROM companies
+       WHERE is_parent=0 AND status='active'
+       ORDER BY name`
+    );
+    return rows.map(row => Number(row.id)).filter(Boolean);
+  }
+  const access = req.access || await buildUserAccess(req.user);
+  return access.globalRole === 'group_admin'
+    ? (await q('SELECT id FROM companies WHERE is_parent=0 AND status="active"')).map(row => Number(row.id))
+    : companyIdsFromAccess(access).filter(id => hasEffectivePermission(access, 'finance.view', id));
+};
+
+const ensureCollectionCompany = async (req, companyId) => {
+  const ids = await collectionCompanyIds(req);
+  if (!ids.includes(Number(companyId))) {
+    const err = new Error('You do not have collection access to this company.');
+    err.statusCode = 403;
+    throw err;
+  }
+};
+
+const withIdCardUrl = async row => {
+  if (!row?.id_card_storage_key || !process.env.S3_BUCKET) return row;
+  const command = new GetObjectCommand({
+    Bucket: process.env.S3_BUCKET,
+    Key: row.id_card_storage_key,
+    ResponseContentDisposition: 'inline'
+  });
+  return { ...row, id_card_url: await getSignedUrl(s3, command, { expiresIn: 900 }) };
+};
+
+app.get('/api/collections/companies', requireCollectionAccess, safe(async (req, res) => {
+  const ids = await collectionCompanyIds(req);
+  if (!ids.length) return res.json([]);
+  res.json(await q(`SELECT id,name,currency FROM companies WHERE id IN (${ids.map(() => '?').join(',')}) ORDER BY name`, ids));
+}));
+
+app.get('/api/collections/summary', requireCollectionAccess, safe(async (req, res) => {
+  const ids = await collectionCompanyIds(req);
+  if (!ids.length) return res.json({ active_customers: 0, principal_outstanding: 0, monthly_interest: 0, due_now: 0, collected_this_month: 0 });
+  const placeholders = ids.map(() => '?').join(',');
+  const [summary] = await q(
+    `SELECT COUNT(*) active_customers,
+            COALESCE(SUM(principal_amount),0) principal_outstanding,
+            COALESCE(SUM(monthly_interest_amount),0) monthly_interest,
+            COALESCE(SUM(next_interest_date<=CURDATE()),0) due_now
+     FROM collection_customers WHERE status='active' AND company_id IN (${placeholders})`, ids
+  );
+  const [payments] = await q(
+    `SELECT COALESCE(SUM(p.amount),0) collected_this_month
+     FROM collection_payments p JOIN collection_customers c ON c.id=p.customer_id
+     WHERE c.company_id IN (${placeholders}) AND (p.status IS NULL OR p.status='posted') AND DATE_FORMAT(p.payment_date,'%Y-%m')=DATE_FORMAT(CURDATE(),'%Y-%m')`, ids
+  );
+  res.json({ ...summary, ...payments });
+}));
+
+app.get('/api/collections/dashboard', requireCollectionAccess, safe(async (req, res) => {
+  const ids = await collectionCompanyIds(req);
+  if (!ids.length) return res.json({ metrics: {}, due_customers: [], recent_payments: [] });
+  const placeholders = ids.map(() => '?').join(',');
+  const [metrics] = await q(
+    `SELECT
+       COUNT(*) active_customers,
+       COALESCE(SUM(next_interest_date=CURDATE()),0) due_today,
+       COALESCE(SUM(next_interest_date<CURDATE()),0) overdue_customers,
+       COALESCE(SUM(CASE WHEN next_interest_date<=CURDATE() THEN monthly_interest_amount ELSE 0 END),0) expected_now,
+       COALESCE(SUM(CASE WHEN next_interest_date=CURDATE() THEN monthly_interest_amount ELSE 0 END),0) expected_today
+     FROM collection_customers
+     WHERE status='active' AND company_id IN (${placeholders})`, ids
+  );
+  const [todayPayments] = await q(
+    `SELECT COALESCE(SUM(cp.amount),0) collected_today,COUNT(*) payments_today
+     FROM collection_payments cp
+     JOIN collection_customers cc ON cc.id=cp.customer_id
+     WHERE cc.company_id IN (${placeholders}) AND (cp.status IS NULL OR cp.status='posted') AND cp.payment_date=CURDATE()`, ids
+  );
+  const dueCustomers = await q(
+    `SELECT cc.id,cc.customer_name,cc.phone,cc.next_interest_date,cc.monthly_interest_amount,
+            cc.id_card_number,c.currency,DATEDIFF(CURDATE(),cc.next_interest_date) days_overdue
+     FROM collection_customers cc JOIN companies c ON c.id=cc.company_id
+     WHERE cc.status='active' AND cc.company_id IN (${placeholders}) AND cc.next_interest_date<=CURDATE()
+     ORDER BY cc.next_interest_date,cc.customer_name LIMIT 8`, ids
+  );
+  const recentPayments = await q(
+    `SELECT cp.id,cp.amount,cp.payment_date,cp.payment_method,cp.created_at,
+            cc.customer_name,c.currency,u.name collected_by_name
+     FROM collection_payments cp
+     JOIN collection_customers cc ON cc.id=cp.customer_id
+     JOIN companies c ON c.id=cc.company_id
+     LEFT JOIN users u ON u.id=cp.collected_by
+     WHERE cc.company_id IN (${placeholders}) AND (cp.status IS NULL OR cp.status='posted')
+     ORDER BY cp.created_at DESC LIMIT 7`, ids
+  );
+  res.json({ metrics: { ...metrics, ...todayPayments }, due_customers: dueCustomers, recent_payments: recentPayments });
+}));
+
+app.get('/api/collections/reminders', requireCollectionAccess, safe(async (req, res) => {
+  const ids = await collectionCompanyIds(req);
+  if (!ids.length) return res.json({ summary: { overdue: 0, due_today: 0, upcoming: 0 }, customers: [] });
+  const placeholders = ids.map(() => '?').join(',');
+  const customers = await q(
+    `SELECT cc.id,cc.customer_name,cc.phone,cc.id_card_number,cc.next_interest_date,
+            cc.monthly_interest_amount,cc.principal_amount,c.name company_name,c.currency,
+            DATEDIFF(cc.next_interest_date,CURDATE()) days_until_due
+     FROM collection_customers cc JOIN companies c ON c.id=cc.company_id
+     WHERE cc.status='active' AND cc.company_id IN (${placeholders})
+       AND cc.next_interest_date<=DATE_ADD(CURDATE(),INTERVAL 7 DAY)
+     ORDER BY cc.next_interest_date,cc.customer_name`, ids
+  );
+  res.json({ summary: {
+    overdue: customers.filter(item => Number(item.days_until_due) < 0).length,
+    due_today: customers.filter(item => Number(item.days_until_due) === 0).length,
+    upcoming: customers.filter(item => Number(item.days_until_due) > 0).length
+  }, customers });
+}));
+
+app.get('/api/collections/admin-dashboard', requireCollectionAccess, safe(async (req, res) => {
+  if (req.user?.role === 'frontdesk') return res.status(403).json({ message: 'Finance administration access is required.' });
+  const ids = await collectionCompanyIds(req);
+  if (!ids.length) return res.json({ metrics: {}, companies: [], high_risk_customers: [], recent_voids: [], staff_activity: [] });
+  const ph = ids.map(() => '?').join(',');
+  const [portfolio] = await q(
+    `SELECT COUNT(*) active_customers,COALESCE(SUM(principal_amount),0) principal_outstanding,
+            COALESCE(SUM(monthly_interest_amount),0) monthly_interest,
+            COALESCE(SUM(next_interest_date<CURDATE()),0) overdue_customers,
+            COALESCE(SUM(CASE WHEN next_interest_date<CURDATE() THEN monthly_interest_amount ELSE 0 END),0) overdue_value
+     FROM collection_customers WHERE status='active' AND company_id IN (${ph})`, ids
+  );
+  const [month] = await q(
+    `SELECT COALESCE(SUM(cp.amount),0) collected_this_month,COUNT(*) receipts_this_month
+     FROM collection_payments cp JOIN collection_customers cc ON cc.id=cp.customer_id
+     WHERE cc.company_id IN (${ph}) AND (cp.status IS NULL OR cp.status='posted')
+       AND DATE_FORMAT(cp.payment_date,'%Y-%m')=DATE_FORMAT(CURDATE(),'%Y-%m')`, ids
+  );
+  const companies = await q(
+    `SELECT c.id,c.name,c.currency,
+            COUNT(cc.id) active_customers,
+            COALESCE(SUM(cc.principal_amount),0) principal_outstanding,
+            COALESCE(SUM(cc.next_interest_date<CURDATE()),0) overdue_customers,
+            COALESCE(SUM(CASE WHEN cc.next_interest_date<CURDATE() THEN cc.monthly_interest_amount ELSE 0 END),0) overdue_value,
+            COALESCE((SELECT SUM(cp.amount) FROM collection_payments cp JOIN collection_customers x ON x.id=cp.customer_id WHERE x.company_id=c.id AND (cp.status IS NULL OR cp.status='posted') AND DATE_FORMAT(cp.payment_date,'%Y-%m')=DATE_FORMAT(CURDATE(),'%Y-%m')),0) collected_this_month
+     FROM companies c LEFT JOIN collection_customers cc ON cc.company_id=c.id AND cc.status='active'
+     WHERE c.id IN (${ph}) GROUP BY c.id,c.name,c.currency ORDER BY overdue_value DESC,c.name`, ids
+  );
+  const high_risk_customers = await q(
+    `SELECT cc.id,cc.customer_name,cc.phone,cc.next_interest_date,cc.principal_amount,cc.monthly_interest_amount,
+            DATEDIFF(CURDATE(),cc.next_interest_date) days_overdue,c.name company_name,c.currency
+     FROM collection_customers cc JOIN companies c ON c.id=cc.company_id
+     WHERE cc.status='active' AND cc.next_interest_date<CURDATE() AND cc.company_id IN (${ph})
+     ORDER BY days_overdue DESC,cc.principal_amount DESC LIMIT 12`, ids
+  );
+  const recent_voids = await q(
+    `SELECT cp.id,cp.receipt_number,cp.amount,cp.payment_date,cp.voided_at,cp.void_reason,
+            cc.customer_name,c.name company_name,c.currency,u.name voided_by_name
+     FROM collection_payments cp JOIN collection_customers cc ON cc.id=cp.customer_id
+     JOIN companies c ON c.id=cc.company_id LEFT JOIN users u ON u.id=cp.voided_by
+     WHERE cp.status='voided' AND cc.company_id IN (${ph}) ORDER BY cp.voided_at DESC LIMIT 10`, ids
+  );
+  const staff_activity = await q(
+    `SELECT COALESCE(u.name,'Unknown') staff_name,COUNT(*) receipt_count,COALESCE(SUM(cp.amount),0) collected_amount,MAX(cp.created_at) last_collection
+     FROM collection_payments cp JOIN collection_customers cc ON cc.id=cp.customer_id LEFT JOIN users u ON u.id=cp.collected_by
+     WHERE cc.company_id IN (${ph}) AND (cp.status IS NULL OR cp.status='posted')
+       AND cp.payment_date>=DATE_SUB(CURDATE(),INTERVAL 30 DAY)
+     GROUP BY cp.collected_by,u.name ORDER BY collected_amount DESC`, ids
+  );
+  res.json({ metrics: { ...portfolio, ...month }, companies, high_risk_customers, recent_voids, staff_activity });
+}));
+
+app.get('/api/collections/customers', requireCollectionAccess, safe(async (req, res) => {
+  const ids = await collectionCompanyIds(req);
+  if (!ids.length) return res.json([]);
+  const rows = await q(
+    `SELECT cc.*,c.name company_name,c.currency,
+            DATEDIFF(CURDATE(),cc.next_interest_date) days_overdue,
+            (SELECT COALESCE(SUM(cp.amount),0) FROM collection_payments cp WHERE cp.customer_id=cc.id AND (cp.status IS NULL OR cp.status='posted')) total_interest_collected,
+            (SELECT MAX(cp.payment_date) FROM collection_payments cp WHERE cp.customer_id=cc.id AND (cp.status IS NULL OR cp.status='posted')) last_payment_date
+     FROM collection_customers cc JOIN companies c ON c.id=cc.company_id
+     WHERE cc.company_id IN (${ids.map(() => '?').join(',')})
+     ORDER BY cc.status='active' DESC,cc.next_interest_date,cc.customer_name`, ids
+  );
+  res.json(await Promise.all(rows.map(withIdCardUrl)));
+}));
+
+app.get('/api/collections/customers/:id/payments', requireCollectionAccess, safe(async (req, res) => {
+  const [customer] = await q('SELECT company_id FROM collection_customers WHERE id=?', [req.params.id]);
+  if (!customer) return res.status(404).json({ message: 'Customer not found.' });
+  await ensureCollectionCompany(req, customer.company_id);
+  res.json(await q(
+    `SELECT cp.*,u.name collected_by_name FROM collection_payments cp
+     LEFT JOIN users u ON u.id=cp.collected_by WHERE cp.customer_id=? ORDER BY cp.payment_date DESC,cp.id DESC`,
+    [req.params.id]
+  ));
+}));
+
+app.get('/api/collections/customers/:id/statement', requireCollectionAccess, safe(async (req, res) => {
+  const [customer] = await q(
+    `SELECT cc.*,c.name company_name,c.currency
+     FROM collection_customers cc JOIN companies c ON c.id=cc.company_id WHERE cc.id=?`,
+    [req.params.id]
+  );
+  if (!customer) return res.status(404).json({ message: 'Customer not found.' });
+  await ensureCollectionCompany(req, customer.company_id);
+  const principal_transactions = await q(
+    `SELECT pt.*,u.name created_by_name FROM collection_principal_transactions pt
+     LEFT JOIN users u ON u.id=pt.created_by
+     WHERE pt.customer_id=? ORDER BY pt.transaction_date DESC,pt.id DESC`, [customer.id]
+  );
+  const interest_payments = await q(
+    `SELECT cp.*,u.name collected_by_name FROM collection_payments cp
+     LEFT JOIN users u ON u.id=cp.collected_by
+     WHERE cp.customer_id=? ORDER BY cp.payment_date DESC,cp.id DESC`, [customer.id]
+  );
+  const postedInterest = interest_payments.filter(payment => payment.status !== 'voided');
+  const additional = principal_transactions.filter(item => item.transaction_type === 'additional_loan').reduce((sum,item) => sum + Number(item.amount),0);
+  const repaid = principal_transactions.filter(item => item.transaction_type === 'principal_repayment').reduce((sum,item) => sum + Number(item.amount),0);
+  const openingPrincipal = Number(customer.principal_amount) - additional + repaid;
+  res.json({ customer, principal_transactions, interest_payments, summary: {
+    opening_principal: openingPrincipal,
+    additional_principal: additional,
+    principal_repaid: repaid,
+    principal_outstanding: Number(customer.principal_amount),
+    interest_collected: postedInterest.reduce((sum,item) => sum + Number(item.amount),0),
+    interest_receipts: postedInterest.length
+  }});
+}));
+
+app.post('/api/collections/customers', requireCollectionAccess, fileUpload.single('id_card'), safe(async (req, res) => {
+  const companyId = Number(req.body.company_id);
+  await ensureCollectionCompany(req, companyId);
+  const customerName = text(req.body.customer_name);
+  const idCardNumber = text(req.body.id_card_number);
+  const principal = number(req.body.principal_amount);
+  const rate = number(req.body.interest_rate);
+  const interestType = req.body.interest_type === 'flat_amount' ? 'flat_amount' : 'percentage';
+  const givenDate = text(req.body.money_given_date);
+  if (!customerName || !idCardNumber || principal <= 0 || rate <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(givenDate)) {
+    return res.status(400).json({ message: 'Customer, ID card number, principal, interest and money-given date are required.' });
+  }
+  let key = null;
+  if (req.file) {
+    if (!requireS3(req, res)) return;
+    key = `insight/company-${companyId}/collections/id-cards/${Date.now()}-${crypto.randomUUID()}-${safeFileName(req.file.originalname)}`;
+    await s3.send(new PutObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key, Body: req.file.buffer, ContentType: req.file.mimetype }));
+  }
+  const monthlyInterest = interestType === 'flat_amount' ? rate : Number((principal * rate / 100).toFixed(2));
+  try {
+    const result = await q(
+      `INSERT INTO collection_customers
+       (company_id,customer_name,phone,address,id_card_number,id_card_storage_key,id_card_original_name,id_card_mime_type,
+        principal_amount,interest_rate,interest_type,monthly_interest_amount,money_given_date,next_interest_date,notes,created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [companyId,customerName,text(req.body.phone),text(req.body.address),idCardNumber,key,req.file?.originalname || null,
+       req.file?.mimetype || null,principal,rate,interestType,monthlyInterest,givenDate,givenDate,text(req.body.notes),req.user.id]
+    );
+    await audit(req, 'Added collection customer', 'collection_customer', customerName);
+    res.status(201).json({ id: result.insertId });
+  } catch (err) {
+    if (key) await s3.send(new DeleteObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key })).catch(() => {});
+    if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'This ID card number already exists for the company.' });
+    throw err;
+  }
+}));
+
+app.post('/api/collections/customers/:id/payments', requireCollectionAccess, safe(async (req, res) => {
+  const [customer] = await q('SELECT * FROM collection_customers WHERE id=?', [req.params.id]);
+  if (!customer) return res.status(404).json({ message: 'Customer not found.' });
+  await ensureCollectionCompany(req, customer.company_id);
+  if (customer.status !== 'active') return res.status(409).json({ message: 'This collection account is closed.' });
+  const periodsCount = Math.max(1,Math.min(24,Math.floor(number(req.body.periods_count,1))));
+  const penaltyAmount = Math.max(0,number(req.body.penalty_amount,0));
+  const amount = number(req.body.amount, Number(customer.monthly_interest_amount)*periodsCount+penaltyAmount);
+  const paymentDate = text(req.body.payment_date) || new Date().toISOString().slice(0, 10);
+  if (amount <= 0) return res.status(400).json({ message: 'Payment amount must be greater than zero.' });
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const receiptNumber = `COL-${paymentDate.replaceAll('-','')}-${customer.id}-${Date.now().toString().slice(-6)}`;
+    const [result] = await conn.query(
+      `INSERT INTO collection_payments (receipt_number,customer_id,amount,payment_date,interest_for_date,periods_count,penalty_amount,payment_method,reference_no,notes,collected_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [receiptNumber,customer.id,amount,paymentDate,customer.next_interest_date,periodsCount,penaltyAmount,text(req.body.payment_method) || 'cash',text(req.body.reference_no),text(req.body.notes),req.user.id]
+    );
+    await conn.query('UPDATE collection_customers SET next_interest_date=DATE_ADD(next_interest_date,INTERVAL ? MONTH) WHERE id=?', [periodsCount,customer.id]);
+    await conn.commit();
+    await audit(req, 'Collected monthly interest', 'collection_payment', customer.customer_name);
+    res.status(201).json({ id: result.insertId,receipt_number:receiptNumber });
+  } catch (err) { await conn.rollback(); throw err; } finally { conn.release(); }
+}));
+
+app.patch('/api/collections/customers/:id/status', requireCollectionAccess, safe(async (req, res) => {
+  const [customer] = await q('SELECT * FROM collection_customers WHERE id=?', [req.params.id]);
+  if (!customer) return res.status(404).json({ message: 'Customer not found.' });
+  await ensureCollectionCompany(req, customer.company_id);
+  const status = req.body.status === 'closed' ? 'closed' : 'active';
+  await q('UPDATE collection_customers SET status=? WHERE id=?', [status, customer.id]);
+  await audit(req, `${status === 'closed' ? 'Closed' : 'Reopened'} collection account`, 'collection_customer', customer.customer_name);
+  res.json({ ok: true });
+}));
+
+// ---------- FRONT-DESK OFFICE EXPENSES ----------
+
+const withExpenseReceiptUrl = async row => {
+  if (!row?.receipt_storage_key || !process.env.S3_BUCKET) return row;
+  const command = new GetObjectCommand({ Bucket: process.env.S3_BUCKET, Key: row.receipt_storage_key, ResponseContentDisposition: 'inline' });
+  return { ...row, receipt_url: await getSignedUrl(s3, command, { expiresIn: 900 }) };
+};
+
+app.get('/api/frontdesk/expenses', requireCollectionAccess, safe(async (req, res) => {
+  const ids = await collectionCompanyIds(req);
+  if (!ids.length) return res.json({ rows: [], summary: {} });
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = await q(
+    `SELECT e.*,c.name company_name,c.currency,u.name created_by_name
+     FROM frontdesk_office_expenses e JOIN companies c ON c.id=e.company_id
+     LEFT JOIN users u ON u.id=e.created_by
+     WHERE e.company_id IN (${placeholders}) ORDER BY e.expense_date DESC,e.id DESC LIMIT 500`, ids
+  );
+  const [summary] = await q(
+    `SELECT
+       COALESCE(SUM(CASE WHEN expense_date=CURDATE() THEN amount ELSE 0 END),0) today_total,
+       COALESCE(SUM(CASE WHEN DATE_FORMAT(expense_date,'%Y-%m')=DATE_FORMAT(CURDATE(),'%Y-%m') THEN amount ELSE 0 END),0) month_total,
+       COALESCE(SUM(CASE WHEN expense_date=CURDATE() AND payment_method='cash' THEN amount ELSE 0 END),0) today_cash,
+       SUM(expense_date=CURDATE()) today_count
+     FROM frontdesk_office_expenses WHERE company_id IN (${placeholders})`, ids
+  );
+  res.json({ rows: await Promise.all(rows.map(withExpenseReceiptUrl)), summary });
+}));
+
+app.post('/api/frontdesk/expenses', requireCollectionAccess, fileUpload.single('receipt'), safe(async (req, res) => {
+  const companyId = Number(req.body.company_id);
+  await ensureCollectionCompany(req, companyId);
+  const expenseDate = text(req.body.expense_date);
+  const category = text(req.body.category);
+  const description = text(req.body.description);
+  const amount = number(req.body.amount);
+  const allowedMethods = new Set(['cash','bank','upi','card','other']);
+  const paymentMethod = allowedMethods.has(req.body.payment_method) ? req.body.payment_method : 'cash';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(expenseDate) || !category || !description || amount <= 0) {
+    return res.status(400).json({ message: 'Date, category, description and a valid amount are required.' });
+  }
+  let key = null;
+  if (req.file) {
+    if (!requireS3(req, res)) return;
+    key = `insight/company-${companyId}/frontdesk/expense-receipts/${Date.now()}-${crypto.randomUUID()}-${safeFileName(req.file.originalname)}`;
+    await s3.send(new PutObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key, Body: req.file.buffer, ContentType: req.file.mimetype }));
+  }
+  try {
+    const result = await q(
+      `INSERT INTO frontdesk_office_expenses
+       (company_id,expense_date,category,description,vendor,amount,payment_method,receipt_storage_key,receipt_original_name,receipt_mime_type,notes,created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [companyId,expenseDate,category,description,text(req.body.vendor),amount,paymentMethod,key,req.file?.originalname || null,req.file?.mimetype || null,text(req.body.notes),req.user.id]
+    );
+    await audit(req, 'Recorded office expense', 'frontdesk_office_expense', `${category}: ${description}`);
+    res.status(201).json({ id: result.insertId });
+  } catch (err) {
+    if (key) await s3.send(new DeleteObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key })).catch(() => {});
+    throw err;
+  }
+}));
+
+app.get('/api/frontdesk/preferences', requireCollectionAccess, safe(async (req, res) => {
+  if (req.user?.role !== 'frontdesk') return res.status(403).json({ message: 'Front-desk access is required.' });
+  const [preference] = await q(
+    `SELECT p.default_company_id,c.name default_company_name,p.updated_at
+     FROM frontdesk_user_preferences p JOIN companies c ON c.id=p.default_company_id
+     WHERE p.user_id=? LIMIT 1`, [req.user.id]
+  );
+  if (preference) return res.json(preference);
+  const [company] = await q(`SELECT id default_company_id,name default_company_name FROM companies WHERE is_parent=0 AND status='active' ORDER BY name LIMIT 1`);
+  res.json(company || { default_company_id: null, default_company_name: null });
+}));
+
+app.put('/api/frontdesk/preferences/default-company', requireCollectionAccess, safe(async (req, res) => {
+  if (req.user?.role !== 'frontdesk') return res.status(403).json({ message: 'Front-desk access is required.' });
+  const companyId = Number(req.body.default_company_id);
+  const adminPassword = String(req.body.admin_password || '');
+  const [company] = await q(`SELECT id,name FROM companies WHERE id=? AND is_parent=0 AND status='active' LIMIT 1`, [companyId]);
+  if (!company) return res.status(400).json({ message: 'Select an active operating company.' });
+  if (!adminPassword) return res.status(400).json({ message: 'Group Admin password is required.' });
+  const admins = await q(`SELECT id,password_hash FROM users WHERE role='group_admin' AND status='active'`);
+  let approvingAdmin = null;
+  for (const admin of admins) {
+    if (await bcrypt.compare(adminPassword, admin.password_hash)) { approvingAdmin = admin; break; }
+  }
+  if (!approvingAdmin) return res.status(401).json({ message: 'Group Admin password is incorrect.' });
+  await q(
+    `INSERT INTO frontdesk_user_preferences (user_id,default_company_id,approved_by)
+     VALUES (?,?,?) ON DUPLICATE KEY UPDATE default_company_id=VALUES(default_company_id),approved_by=VALUES(approved_by)`,
+    [req.user.id, company.id, approvingAdmin.id]
+  );
+  await audit(req, 'Changed front-desk default company', 'frontdesk_preference', company.name);
+  res.json({ default_company_id: company.id, default_company_name: company.name });
+}));
+
+// ---------- FRONT-DESK CASHBOOK ----------
+
+const cashbookDay = async (companyId, cashDate) => {
+  const [day] = await q(`SELECT * FROM frontdesk_cash_days WHERE company_id=? AND cash_date=? LIMIT 1`, [companyId,cashDate]);
+  return day || { company_id:companyId,cash_date:cashDate,opening_balance:0,actual_closing_balance:null,closing_notes:null,status:'open' };
+};
+
+app.get('/api/frontdesk/cashbook', requireCollectionAccess, safe(async (req, res) => {
+  const companyId = Number(req.query.company_id);
+  const cashDate = text(req.query.date);
+  if (!companyId || !/^\d{4}-\d{2}-\d{2}$/.test(cashDate)) return res.status(400).json({ message: 'Company and date are required.' });
+  await ensureCollectionCompany(req, companyId);
+  const day = await cashbookDay(companyId,cashDate);
+  const [automatic] = await q(
+    `SELECT
+       COALESCE((SELECT SUM(cp.amount) FROM collection_payments cp JOIN collection_customers cc ON cc.id=cp.customer_id WHERE cc.company_id=? AND cp.payment_date=? AND cp.payment_method='cash' AND (cp.status IS NULL OR cp.status='posted')),0) interest_cash_received,
+       COALESCE((SELECT SUM(e.amount) FROM frontdesk_office_expenses e WHERE e.company_id=? AND e.expense_date=? AND e.payment_method='cash' AND (e.status IS NULL OR e.status='posted')),0) office_cash_paid,
+       COALESCE((SELECT SUM(ce.amount) FROM frontdesk_cash_entries ce WHERE ce.company_id=? AND ce.entry_date=? AND ce.direction='received' AND (ce.status IS NULL OR ce.status='posted')),0) manual_cash_received,
+       COALESCE((SELECT SUM(ce.amount) FROM frontdesk_cash_entries ce WHERE ce.company_id=? AND ce.entry_date=? AND ce.direction='paid' AND (ce.status IS NULL OR ce.status='posted')),0) manual_cash_paid`,
+    [companyId,cashDate,companyId,cashDate,companyId,cashDate,companyId,cashDate]
+  );
+  const manualEntries = await q(
+    `SELECT ce.id,ce.entry_date,ce.direction,ce.category,ce.description,ce.amount,ce.reference_no,ce.notes,ce.created_at,u.name created_by_name,'manual' source
+     FROM frontdesk_cash_entries ce LEFT JOIN users u ON u.id=ce.created_by
+     WHERE ce.company_id=? AND ce.entry_date=? AND (ce.status IS NULL OR ce.status='posted')`, [companyId,cashDate]
+  );
+  const interestEntries = await q(
+    `SELECT cp.id,cp.payment_date entry_date,'received' direction,'Interest collection' category,
+            CONCAT('Interest from ',cc.customer_name) description,cp.amount,cp.reference_no,cp.notes,cp.created_at,u.name created_by_name,'collection' source
+     FROM collection_payments cp JOIN collection_customers cc ON cc.id=cp.customer_id LEFT JOIN users u ON u.id=cp.collected_by
+     WHERE cc.company_id=? AND cp.payment_date=? AND cp.payment_method='cash' AND (cp.status IS NULL OR cp.status='posted')`, [companyId,cashDate]
+  );
+  const expenseEntries = await q(
+    `SELECT e.id,e.expense_date entry_date,'paid' direction,e.category,e.description,e.amount,NULL reference_no,e.notes,e.created_at,u.name created_by_name,'office_expense' source
+     FROM frontdesk_office_expenses e LEFT JOIN users u ON u.id=e.created_by
+     WHERE e.company_id=? AND e.expense_date=? AND e.payment_method='cash' AND (e.status IS NULL OR e.status='posted')`, [companyId,cashDate]
+  );
+  const expectedClosing = Number(day.opening_balance||0)+Number(automatic.interest_cash_received||0)+Number(automatic.manual_cash_received||0)-Number(automatic.office_cash_paid||0)-Number(automatic.manual_cash_paid||0);
+  const actual = day.actual_closing_balance === null ? null : Number(day.actual_closing_balance);
+  res.json({ day,summary:{...automatic,opening_balance:Number(day.opening_balance||0),expected_closing:expectedClosing,actual_closing:actual,difference:actual===null?null:actual-expectedClosing},entries:[...manualEntries,...interestEntries,...expenseEntries].sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))) });
+}));
+
+app.put('/api/frontdesk/cashbook/opening', requireCollectionAccess, safe(async (req, res) => {
+  const companyId=Number(req.body.company_id); const cashDate=text(req.body.date); const opening=number(req.body.opening_balance,-1);
+  if(!companyId||!/^\d{4}-\d{2}-\d{2}$/.test(cashDate)||opening<0)return res.status(400).json({message:'Company, date and a valid opening balance are required.'});
+  await ensureCollectionCompany(req,companyId); const day=await cashbookDay(companyId,cashDate);
+  if(day.status==='closed')return res.status(409).json({message:'This cash day is already closed.'});
+  await q(`INSERT INTO frontdesk_cash_days (company_id,cash_date,opening_balance,created_by) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE opening_balance=VALUES(opening_balance)`,[companyId,cashDate,opening,req.user.id]);
+  await audit(req,'Updated cashbook opening balance','frontdesk_cash_day',`${companyId} ${cashDate}`); res.json({ok:true});
+}));
+
+app.post('/api/frontdesk/cashbook/entries', requireCollectionAccess, safe(async (req, res) => {
+  const companyId=Number(req.body.company_id); const entryDate=text(req.body.entry_date); const direction=req.body.direction==='paid'?'paid':'received'; const category=text(req.body.category); const description=text(req.body.description); const amount=number(req.body.amount);
+  if(!companyId||!/^\d{4}-\d{2}-\d{2}$/.test(entryDate)||!category||!description||amount<=0)return res.status(400).json({message:'Company, date, category, description and amount are required.'});
+  await ensureCollectionCompany(req,companyId); const day=await cashbookDay(companyId,entryDate); if(day.status==='closed')return res.status(409).json({message:'This cash day is closed. New entries are not allowed.'});
+  const result=await q(`INSERT INTO frontdesk_cash_entries (company_id,entry_date,direction,category,description,amount,reference_no,notes,created_by) VALUES (?,?,?,?,?,?,?,?,?)`,[companyId,entryDate,direction,category,description,amount,text(req.body.reference_no),text(req.body.notes),req.user.id]);
+  await audit(req,`Recorded cash ${direction}`,'frontdesk_cash_entry',description); res.status(201).json({id:result.insertId});
+}));
+
+app.post('/api/frontdesk/cashbook/close', requireCollectionAccess, safe(async (req, res) => {
+  const companyId=Number(req.body.company_id); const cashDate=text(req.body.date); const actual=number(req.body.actual_closing_balance,-1);
+  if(!companyId||!/^\d{4}-\d{2}-\d{2}$/.test(cashDate)||actual<0)return res.status(400).json({message:'Company, date and actual cash count are required.'});
+  await ensureCollectionCompany(req,companyId); const existing=await cashbookDay(companyId,cashDate); if(existing.status==='closed')return res.status(409).json({message:'This cash day is already closed.'});
+  await q(`INSERT INTO frontdesk_cash_days (company_id,cash_date,opening_balance,actual_closing_balance,closing_notes,status,closed_by,closed_at,created_by) VALUES (?,?,?,?,?,'closed',?,NOW(),?) ON DUPLICATE KEY UPDATE actual_closing_balance=VALUES(actual_closing_balance),closing_notes=VALUES(closing_notes),status='closed',closed_by=VALUES(closed_by),closed_at=NOW()`,[companyId,cashDate,Number(existing.opening_balance||0),actual,text(req.body.closing_notes),req.user.id,req.user.id]);
+  await audit(req,'Closed cashbook day','frontdesk_cash_day',`${companyId} ${cashDate}`); res.json({ok:true});
+}));
+
+const verifyAdminPassword = async password => {
+  const admins=await q(`SELECT id,password_hash FROM users WHERE role='group_admin' AND status='active'`);
+  for(const admin of admins) if(await bcrypt.compare(String(password||''),admin.password_hash)) return admin;
+  return null;
+};
+
+app.get('/api/collections/payments/:id/receipt',requireCollectionAccess,safe(async(req,res)=>{
+  const [row]=await q(`SELECT cp.*,cc.customer_name,cc.id_card_number,cc.company_id,cc.monthly_interest_amount,c.name company_name,c.currency,u.name collected_by_name FROM collection_payments cp JOIN collection_customers cc ON cc.id=cp.customer_id JOIN companies c ON c.id=cc.company_id LEFT JOIN users u ON u.id=cp.collected_by WHERE cp.id=?`,[req.params.id]);
+  if(!row)return res.status(404).json({message:'Receipt not found.'});await ensureCollectionCompany(req,row.company_id);res.json(row);
+}));
+
+app.post('/api/collections/customers/:id/principal',requireCollectionAccess,safe(async(req,res)=>{
+  const [customer]=await q('SELECT * FROM collection_customers WHERE id=?',[req.params.id]);if(!customer)return res.status(404).json({message:'Customer not found.'});await ensureCollectionCompany(req,customer.company_id);
+  const type=req.body.transaction_type==='additional_loan'?'additional_loan':'principal_repayment';const amount=number(req.body.amount);const transactionDate=text(req.body.transaction_date);if(amount<=0||!/^\d{4}-\d{2}-\d{2}$/.test(transactionDate))return res.status(400).json({message:'Valid amount and date are required.'});if(type==='principal_repayment'&&amount>Number(customer.principal_amount))return res.status(400).json({message:'Repayment cannot exceed current principal.'});
+  const conn=await pool.getConnection();try{await conn.beginTransaction();await conn.query(`INSERT INTO collection_principal_transactions (customer_id,transaction_date,transaction_type,amount,payment_method,reference_no,notes,created_by) VALUES (?,?,?,?,?,?,?,?)`,[customer.id,transactionDate,type,amount,text(req.body.payment_method)||'cash',text(req.body.reference_no),text(req.body.notes),req.user.id]);const nextPrincipal=type==='additional_loan'?Number(customer.principal_amount)+amount:Number(customer.principal_amount)-amount;const nextInterest=customer.interest_type==='percentage'?Number((nextPrincipal*Number(customer.interest_rate)/100).toFixed(2)):Number(customer.monthly_interest_amount);await conn.query('UPDATE collection_customers SET principal_amount=?,monthly_interest_amount=? WHERE id=?',[nextPrincipal,nextInterest,customer.id]);await conn.commit();res.status(201).json({principal_amount:nextPrincipal,monthly_interest_amount:nextInterest});}catch(err){await conn.rollback();throw err;}finally{conn.release();}
+}));
+
+app.put('/api/collections/customers/:id',requireCollectionAccess,fileUpload.single('id_card'),safe(async(req,res)=>{const [customer]=await q('SELECT * FROM collection_customers WHERE id=?',[req.params.id]);if(!customer)return res.status(404).json({message:'Customer not found.'});await ensureCollectionCompany(req,customer.company_id);const name=text(req.body.customer_name),idNumber=text(req.body.id_card_number);if(!name||!idNumber)return res.status(400).json({message:'Customer name and ID card number are required.'});let key=customer.id_card_storage_key;if(req.file){if(!requireS3(req,res))return;key=`insight/company-${customer.company_id}/collections/id-cards/${Date.now()}-${crypto.randomUUID()}-${safeFileName(req.file.originalname)}`;await s3.send(new PutObjectCommand({Bucket:process.env.S3_BUCKET,Key:key,Body:req.file.buffer,ContentType:req.file.mimetype}));}try{await q(`UPDATE collection_customers SET customer_name=?,phone=?,address=?,id_card_number=?,id_card_storage_key=?,id_card_original_name=?,id_card_mime_type=?,notes=? WHERE id=?`,[name,text(req.body.phone),text(req.body.address),idNumber,key,req.file?.originalname||customer.id_card_original_name,req.file?.mimetype||customer.id_card_mime_type,text(req.body.notes),customer.id]);if(req.file&&customer.id_card_storage_key)await s3.send(new DeleteObjectCommand({Bucket:process.env.S3_BUCKET,Key:customer.id_card_storage_key})).catch(()=>{});res.json({ok:true});}catch(err){if(req.file)await s3.send(new DeleteObjectCommand({Bucket:process.env.S3_BUCKET,Key:key})).catch(()=>{});if(err.code==='ER_DUP_ENTRY')return res.status(409).json({message:'This ID card number already exists.'});throw err;}}));
+
+app.post('/api/collections/payments/:id/void',requireCollectionAccess,safe(async(req,res)=>{
+  const [payment]=await q(`SELECT cp.*,cc.company_id FROM collection_payments cp JOIN collection_customers cc ON cc.id=cp.customer_id WHERE cp.id=?`,[req.params.id]);if(!payment)return res.status(404).json({message:'Payment not found.'});await ensureCollectionCompany(req,payment.company_id);if(payment.status==='voided')return res.status(409).json({message:'Payment is already voided.'});const admin=await verifyAdminPassword(req.body.admin_password);if(!admin)return res.status(401).json({message:'Group Admin password is incorrect.'});await q(`UPDATE collection_payments SET status='voided',voided_by=?,voided_at=NOW(),void_reason=? WHERE id=?`,[admin.id,text(req.body.reason),payment.id]);await q(`UPDATE collection_customers SET next_interest_date=DATE_SUB(next_interest_date,INTERVAL ? MONTH) WHERE id=?`,[payment.periods_count||1,payment.customer_id]);res.json({ok:true});
+}));
+
+app.post('/api/frontdesk/cashbook/reopen',requireCollectionAccess,safe(async(req,res)=>{const companyId=Number(req.body.company_id);const cashDate=text(req.body.date);await ensureCollectionCompany(req,companyId);const admin=await verifyAdminPassword(req.body.admin_password);if(!admin)return res.status(401).json({message:'Group Admin password is incorrect.'});await q(`UPDATE frontdesk_cash_days SET status='open',actual_closing_balance=NULL,closing_notes=NULL,closed_by=NULL,closed_at=NULL WHERE company_id=? AND cash_date=?`,[companyId,cashDate]);res.json({ok:true});}));
+
+app.post('/api/frontdesk/expenses/:id/void',requireCollectionAccess,safe(async(req,res)=>{const [expense]=await q('SELECT * FROM frontdesk_office_expenses WHERE id=?',[req.params.id]);if(!expense)return res.status(404).json({message:'Expense not found.'});await ensureCollectionCompany(req,expense.company_id);const admin=await verifyAdminPassword(req.body.admin_password);if(!admin)return res.status(401).json({message:'Group Admin password is incorrect.'});await q(`UPDATE frontdesk_office_expenses SET status='voided',voided_by=?,voided_at=NOW(),void_reason=? WHERE id=?`,[admin.id,text(req.body.reason),expense.id]);res.json({ok:true});}));
+
+app.post('/api/frontdesk/cashbook/entries/:id/void',requireCollectionAccess,safe(async(req,res)=>{const [entry]=await q('SELECT * FROM frontdesk_cash_entries WHERE id=?',[req.params.id]);if(!entry)return res.status(404).json({message:'Cash entry not found.'});await ensureCollectionCompany(req,entry.company_id);const admin=await verifyAdminPassword(req.body.admin_password);if(!admin)return res.status(401).json({message:'Group Admin password is incorrect.'});await q(`UPDATE frontdesk_cash_entries SET status='voided',voided_by=?,voided_at=NOW(),void_reason=? WHERE id=?`,[admin.id,text(req.body.reason),entry.id]);res.json({ok:true});}));
+
+app.get('/api/frontdesk/reports',requireCollectionAccess,safe(async(req,res)=>{const ids=await collectionCompanyIds(req);const companyId=Number(req.query.company_id);const from=text(req.query.from);const to=text(req.query.to);if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to))return res.status(400).json({message:'Valid report dates are required.'});const selected=companyId?[companyId]:ids;if(companyId)await ensureCollectionCompany(req,companyId);if(!selected.length)return res.json({summary:{},collections:[],expenses:[]});const ph=selected.map(()=>'?').join(',');const collections=await q(`SELECT cp.receipt_number,cp.payment_date,cc.customer_name,c.name company_name,cp.payment_method,cp.amount,cp.penalty_amount,cp.status FROM collection_payments cp JOIN collection_customers cc ON cc.id=cp.customer_id JOIN companies c ON c.id=cc.company_id WHERE cc.company_id IN (${ph}) AND cp.payment_date BETWEEN ? AND ? ORDER BY cp.payment_date DESC`,[...selected,from,to]);const expenses=await q(`SELECT e.expense_date,c.name company_name,e.category,e.description,e.vendor,e.payment_method,e.amount,e.status FROM frontdesk_office_expenses e JOIN companies c ON c.id=e.company_id WHERE e.company_id IN (${ph}) AND e.expense_date BETWEEN ? AND ? ORDER BY e.expense_date DESC`,[...selected,from,to]);const collectionTotal=collections.filter(x=>x.status!=='voided').reduce((s,x)=>s+Number(x.amount),0);const expenseTotal=expenses.filter(x=>x.status!=='voided').reduce((s,x)=>s+Number(x.amount),0);res.json({summary:{collection_total:collectionTotal,expense_total:expenseTotal,net_cash_flow:collectionTotal-expenseTotal,collection_count:collections.length,expense_count:expenses.length},collections,expenses});}));
+
+app.put('/api/frontdesk/change-password',requireCollectionAccess,safe(async(req,res)=>{if(req.user.role!=='frontdesk')return res.status(403).json({message:'Front-desk access is required.'});const [user]=await q('SELECT password_hash FROM users WHERE id=?',[req.user.id]);if(!await bcrypt.compare(String(req.body.current_password||''),user.password_hash))return res.status(401).json({message:'Current password is incorrect.'});const next=String(req.body.new_password||'');if(next.length<8||!/[A-Z]/.test(next)||!/[a-z]/.test(next)||!/[0-9]/.test(next))return res.status(400).json({message:'New password must have 8 characters, uppercase, lowercase and a number.'});await q('UPDATE users SET password_hash=? WHERE id=?',[await bcrypt.hash(next,12),req.user.id]);res.json({ok:true});}));
+
+app.get('/api/frontdesk/login-history',requireCollectionAccess,safe(async(req,res)=>{if(req.user.role!=='frontdesk')return res.status(403).json({message:'Front-desk access is required.'});res.json(await q(`SELECT id,login_at,ip_address,user_agent FROM frontdesk_login_history WHERE user_id=? ORDER BY login_at DESC LIMIT 20`,[req.user.id]));}));
+
+// ---------- INVESTOR INTEREST PAYMENTS ----------
+
+app.get('/api/investors/overview', requireCollectionAccess, safe(async (req,res) => {
+  if (req.user?.role === 'frontdesk') return res.status(403).json({message:'Finance administration access is required.'});
+  const ids=await collectionCompanyIds(req);
+  if(!ids.length)return res.json({companies:[],investors:[],summary:{}});
+  const ph=ids.map(()=>'?').join(',');
+  const companies=await q(`SELECT id,name,currency FROM companies WHERE id IN (${ph}) ORDER BY name`,ids);
+  const investors=await q(`SELECT fi.*,c.name company_name,c.currency,DATEDIFF(CURDATE(),fi.next_interest_date) days_overdue,
+    COALESCE((SELECT SUM(p.amount) FROM finance_investor_interest_payments p WHERE p.investor_id=fi.id),0) total_interest_paid,
+    (SELECT MAX(p.payment_date) FROM finance_investor_interest_payments p WHERE p.investor_id=fi.id) last_payment_date
+    FROM finance_investors fi JOIN companies c ON c.id=fi.company_id
+    WHERE fi.company_id IN (${ph}) ORDER BY fi.status='active' DESC,fi.next_interest_date,fi.investor_name`,ids);
+  const [portfolio]=await q(`SELECT COUNT(*) active_investors,COALESCE(SUM(investment_amount),0) investment_received,
+    COALESCE(SUM(monthly_interest_amount),0) monthly_interest_payable,
+    COALESCE(SUM(next_interest_date<=CURDATE()),0) due_now
+    FROM finance_investors WHERE status='active' AND company_id IN (${ph})`,ids);
+  const [paid]=await q(`SELECT COALESCE(SUM(p.amount),0) paid_this_month FROM finance_investor_interest_payments p
+    JOIN finance_investors fi ON fi.id=p.investor_id WHERE fi.company_id IN (${ph})
+    AND DATE_FORMAT(p.payment_date,'%Y-%m')=DATE_FORMAT(CURDATE(),'%Y-%m')`,ids);
+  res.json({companies,investors,summary:{...portfolio,...paid}});
+}));
+
+app.get('/api/investors/:id/payments', requireCollectionAccess, safe(async(req,res)=>{
+  if(req.user?.role==='frontdesk')return res.status(403).json({message:'Finance administration access is required.'});
+  const [investor]=await q('SELECT company_id FROM finance_investors WHERE id=?',[req.params.id]);
+  if(!investor)return res.status(404).json({message:'Investor not found.'});
+  await ensureCollectionCompany(req,investor.company_id);
+  res.json(await q(`SELECT p.*,u.name paid_by_name FROM finance_investor_interest_payments p LEFT JOIN users u ON u.id=p.paid_by WHERE p.investor_id=? ORDER BY p.payment_date DESC,p.id DESC`,[req.params.id]));
+}));
+
+app.post('/api/investors', requireCollectionAccess, safe(async(req,res)=>{
+  if(req.user?.role==='frontdesk')return res.status(403).json({message:'Finance administration access is required.'});
+  const companyId=Number(req.body.company_id),name=text(req.body.investor_name),amount=number(req.body.investment_amount),rate=number(req.body.interest_rate);
+  const interestType=req.body.interest_type==='flat_amount'?'flat_amount':'percentage',date=text(req.body.investment_date),firstDue=text(req.body.next_interest_date)||date;
+  await ensureCollectionCompany(req,companyId);
+  if(!name||amount<=0||rate<=0||!/^(\d{4})-(\d{2})-(\d{2})$/.test(date)||!/^(\d{4})-(\d{2})-(\d{2})$/.test(firstDue))return res.status(400).json({message:'Investor, investment amount, monthly interest and valid dates are required.'});
+  const monthly=interestType==='flat_amount'?rate:Number((amount*rate/100).toFixed(2));
+  const result=await q(`INSERT INTO finance_investors(company_id,investor_name,phone,email,id_number,investment_amount,interest_rate,interest_type,monthly_interest_amount,investment_date,next_interest_date,payment_method,reference_no,notes,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[companyId,name,text(req.body.phone),text(req.body.email),text(req.body.id_number),amount,rate,interestType,monthly,date,firstDue,text(req.body.payment_method)||'Bank transfer',text(req.body.reference_no),text(req.body.notes),req.user.id]);
+  await audit(req,'Recorded investment received','finance_investor',name);
+  res.status(201).json({id:result.insertId});
+}));
+
+app.post('/api/investors/:id/payments', requireCollectionAccess, safe(async(req,res)=>{
+  if(req.user?.role==='frontdesk')return res.status(403).json({message:'Finance administration access is required.'});
+  const [investor]=await q('SELECT * FROM finance_investors WHERE id=?',[req.params.id]);
+  if(!investor)return res.status(404).json({message:'Investor not found.'});
+  await ensureCollectionCompany(req,investor.company_id);
+  if(investor.status!=='active')return res.status(409).json({message:'This investor account is closed.'});
+  const periods=Math.max(1,Math.min(24,Math.floor(number(req.body.periods_count,1)))),amount=number(req.body.amount,Number(investor.monthly_interest_amount)*periods),date=text(req.body.payment_date)||new Date().toISOString().slice(0,10);
+  if(amount<=0||!/^(\d{4})-(\d{2})-(\d{2})$/.test(date))return res.status(400).json({message:'A valid payment date and amount are required.'});
+  const conn=await pool.getConnection();
+  try{await conn.beginTransaction();const receipt=`INV-${date.replaceAll('-','')}-${investor.id}-${Date.now().toString().slice(-6)}`;const [result]=await conn.query(`INSERT INTO finance_investor_interest_payments(investor_id,receipt_number,amount,payment_date,interest_for_date,periods_count,payment_method,reference_no,notes,paid_by) VALUES (?,?,?,?,?,?,?,?,?,?)`,[investor.id,receipt,amount,date,investor.next_interest_date,periods,text(req.body.payment_method)||investor.payment_method||'Bank transfer',text(req.body.reference_no),text(req.body.notes),req.user.id]);await conn.query('UPDATE finance_investors SET next_interest_date=DATE_ADD(next_interest_date,INTERVAL ? MONTH) WHERE id=?',[periods,investor.id]);await conn.commit();await audit(req,'Paid monthly investor interest','investor_interest_payment',investor.investor_name);res.status(201).json({id:result.insertId,receipt_number:receipt});}catch(err){await conn.rollback();throw err}finally{conn.release()}
+}));
+
+app.patch('/api/investors/:id/status', requireCollectionAccess, safe(async(req,res)=>{
+  if(req.user?.role==='frontdesk')return res.status(403).json({message:'Finance administration access is required.'});
+  const [investor]=await q('SELECT * FROM finance_investors WHERE id=?',[req.params.id]);if(!investor)return res.status(404).json({message:'Investor not found.'});await ensureCollectionCompany(req,investor.company_id);const status=req.body.status==='closed'?'closed':'active';await q('UPDATE finance_investors SET status=? WHERE id=?',[status,investor.id]);await audit(req,`${status==='closed'?'Closed':'Reopened'} investor account`,'finance_investor',investor.investor_name);res.json({ok:true});
+}));
+
+// Keep this after the collection routes so multipart and validation failures
+// from this module are returned as JSON as well.
+app.use((err, req, res, next) => {
+  console.error(err);
+  const status = Number(err.statusCode) || (err instanceof multer.MulterError ? 400 : 500);
+  res.status(status).json({
+    message: status === 500 ? 'Server error' : (err.message || 'Request failed'),
+    detail: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
+
+await q(`CREATE TABLE IF NOT EXISTS partner_profiles (id INT AUTO_INCREMENT PRIMARY KEY,person_id INT NOT NULL UNIQUE,user_id INT NOT NULL UNIQUE,status VARCHAR(30) NOT NULL DEFAULT 'active',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(person_id) REFERENCES people(id) ON DELETE CASCADE,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)`);
+await q(`CREATE TABLE IF NOT EXISTS partner_company_access (id INT AUTO_INCREMENT PRIMARY KEY,partner_id INT NOT NULL,company_id INT NOT NULL,relationship_type VARCHAR(60) NOT NULL DEFAULT 'Partner',ownership_percent DECIMAL(7,4) NOT NULL DEFAULT 0,notes TEXT,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,UNIQUE KEY uq_partner_company(partner_id,company_id),FOREIGN KEY(partner_id) REFERENCES partner_profiles(id) ON DELETE CASCADE,FOREIGN KEY(company_id) REFERENCES companies(id) ON DELETE CASCADE)`);
+await q(`CREATE TABLE IF NOT EXISTS partner_investments (id INT AUTO_INCREMENT PRIMARY KEY,partner_id INT NOT NULL,company_id INT NOT NULL,investment_date DATE NOT NULL,investment_type VARCHAR(60) NOT NULL DEFAULT 'Capital contribution',amount DECIMAL(15,2) NOT NULL,currency CHAR(3) NOT NULL DEFAULT 'INR',reference_no VARCHAR(180),notes TEXT,created_by INT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(partner_id) REFERENCES partner_profiles(id) ON DELETE CASCADE,FOREIGN KEY(company_id) REFERENCES companies(id) ON DELETE CASCADE,FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL)`);
+await q(`CREATE TABLE IF NOT EXISTS partner_tasks (id INT AUTO_INCREMENT PRIMARY KEY,partner_id INT NOT NULL,company_id INT NULL,title VARCHAR(220) NOT NULL,description TEXT,due_date DATE,priority VARCHAR(20) NOT NULL DEFAULT 'Medium',status VARCHAR(30) NOT NULL DEFAULT 'pending',created_by INT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,FOREIGN KEY(partner_id) REFERENCES partner_profiles(id) ON DELETE CASCADE,FOREIGN KEY(company_id) REFERENCES companies(id) ON DELETE SET NULL,FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL)`);
+await q(`CREATE TABLE IF NOT EXISTS partner_withdrawal_requests (id INT AUTO_INCREMENT PRIMARY KEY,partner_id INT NOT NULL,company_id INT NOT NULL,amount DECIMAL(15,2) NOT NULL,currency CHAR(3) NOT NULL DEFAULT 'INR',payment_method VARCHAR(60) NOT NULL DEFAULT 'Bank transfer',reason TEXT NOT NULL,status VARCHAR(30) NOT NULL DEFAULT 'pending',admin_notes TEXT,reviewed_by INT NULL,reviewed_at DATETIME NULL,paid_at DATETIME NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,KEY ix_partner_withdrawal_status(status),KEY ix_partner_withdrawal_partner(partner_id,company_id),FOREIGN KEY(partner_id) REFERENCES partner_profiles(id) ON DELETE CASCADE,FOREIGN KEY(company_id) REFERENCES companies(id) ON DELETE CASCADE,FOREIGN KEY(reviewed_by) REFERENCES users(id) ON DELETE SET NULL)`);
+await q(`CREATE TABLE IF NOT EXISTS partner_meetings (id INT AUTO_INCREMENT PRIMARY KEY,company_id INT NOT NULL,title VARCHAR(220) NOT NULL,meeting_type VARCHAR(80) NOT NULL DEFAULT 'Partner meeting',scheduled_at DATETIME NOT NULL,location VARCHAR(255),agenda LONGTEXT,minutes LONGTEXT,resolution_text LONGTEXT,action_type VARCHAR(30) NOT NULL DEFAULT 'acknowledgement',response_due_date DATE,status VARCHAR(30) NOT NULL DEFAULT 'draft',created_by INT NULL,updated_by INT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,KEY ix_partner_meeting_company(company_id),KEY ix_partner_meeting_status(status),FOREIGN KEY(company_id) REFERENCES companies(id) ON DELETE CASCADE,FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL,FOREIGN KEY(updated_by) REFERENCES users(id) ON DELETE SET NULL)`);
+await q(`CREATE TABLE IF NOT EXISTS partner_meeting_responses (id INT AUTO_INCREMENT PRIMARY KEY,meeting_id INT NOT NULL,partner_id INT NOT NULL,response_status VARCHAR(30) NOT NULL DEFAULT 'pending',comment TEXT,responded_at DATETIME NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,UNIQUE KEY uq_partner_meeting_response(meeting_id,partner_id),KEY ix_partner_response_partner(partner_id,response_status),FOREIGN KEY(meeting_id) REFERENCES partner_meetings(id) ON DELETE CASCADE,FOREIGN KEY(partner_id) REFERENCES partner_profiles(id) ON DELETE CASCADE)`);
+await q(`CREATE TABLE IF NOT EXISTS notifications (id BIGINT AUTO_INCREMENT PRIMARY KEY,user_id INT NOT NULL,title VARCHAR(180) NOT NULL,message VARCHAR(700) NOT NULL,type VARCHAR(30) NOT NULL DEFAULT 'info',target_path VARCHAR(255),dedupe_key VARCHAR(255),is_read TINYINT(1) NOT NULL DEFAULT 0,read_at DATETIME NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,UNIQUE KEY uq_notification_dedupe(user_id,dedupe_key),KEY ix_notification_inbox(user_id,is_read,created_at),FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)`);
+await q(`CREATE TABLE IF NOT EXISTS finance_investors (id INT AUTO_INCREMENT PRIMARY KEY,company_id INT NOT NULL,investor_name VARCHAR(180) NOT NULL,phone VARCHAR(40),email VARCHAR(180),id_number VARCHAR(100),investment_amount DECIMAL(15,2) NOT NULL,interest_rate DECIMAL(8,4) NOT NULL,interest_type ENUM('flat_amount','percentage') NOT NULL DEFAULT 'percentage',monthly_interest_amount DECIMAL(15,2) NOT NULL,investment_date DATE NOT NULL,next_interest_date DATE NOT NULL,payment_method VARCHAR(60) DEFAULT 'Bank transfer',reference_no VARCHAR(100),status ENUM('active','closed') NOT NULL DEFAULT 'active',notes TEXT,created_by INT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,KEY ix_finance_investor_due(company_id,status,next_interest_date),FOREIGN KEY(company_id) REFERENCES companies(id) ON DELETE CASCADE,FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL)`);
+await q(`CREATE TABLE IF NOT EXISTS finance_investor_interest_payments (id INT AUTO_INCREMENT PRIMARY KEY,investor_id INT NOT NULL,receipt_number VARCHAR(100) NOT NULL UNIQUE,amount DECIMAL(15,2) NOT NULL,payment_date DATE NOT NULL,interest_for_date DATE NOT NULL,periods_count INT NOT NULL DEFAULT 1,payment_method VARCHAR(60) NOT NULL DEFAULT 'Bank transfer',reference_no VARCHAR(100),notes TEXT,paid_by INT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,KEY ix_investor_interest_payment(investor_id,payment_date),FOREIGN KEY(investor_id) REFERENCES finance_investors(id) ON DELETE CASCADE,FOREIGN KEY(paid_by) REFERENCES users(id) ON DELETE SET NULL)`);
+
+await q(`CREATE TABLE IF NOT EXISTS program_registry (
+  id INT AUTO_INCREMENT PRIMARY KEY,program_name VARCHAR(180) NOT NULL,environment VARCHAR(40) NOT NULL DEFAULT 'production',
+  status VARCHAR(30) NOT NULL DEFAULT 'active',public_url VARCHAR(500),git_url VARCHAR(500),git_branch VARCHAR(120),
+  server_host VARCHAR(255),ssh_user VARCHAR(120),ssh_port INT NOT NULL DEFAULT 22,deployment_path VARCHAR(500),
+  process_manager VARCHAR(180),encrypted_pem LONGTEXT,encrypted_env LONGTEXT,notes TEXT,created_by INT NULL,updated_by INT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_program_environment(program_name,environment),KEY ix_program_status(status),
+  FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL,FOREIGN KEY(updated_by) REFERENCES users(id) ON DELETE SET NULL
+)`);
 
 const port = Number(process.env.PORT || 5000);
 app.listen(port, () => console.log(`Insight API running on http://localhost:${port}`));

@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS partner_withdrawal_requests (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  partner_id INT NOT NULL,
+  company_id INT NOT NULL,
+  amount DECIMAL(15,2) NOT NULL,
+  currency CHAR(3) NOT NULL DEFAULT 'INR',
+  payment_method VARCHAR(60) NOT NULL DEFAULT 'Bank transfer',
+  reason TEXT NOT NULL,
+  status VARCHAR(30) NOT NULL DEFAULT 'pending',
+  admin_notes TEXT,
+  reviewed_by INT NULL,
+  reviewed_at DATETIME NULL,
+  paid_at DATETIME NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY ix_partner_withdrawal_status(status),
+  KEY ix_partner_withdrawal_partner(partner_id, company_id),
+  FOREIGN KEY(partner_id) REFERENCES partner_profiles(id) ON DELETE CASCADE,
+  FOREIGN KEY(company_id) REFERENCES companies(id) ON DELETE CASCADE,
+  FOREIGN KEY(reviewed_by) REFERENCES users(id) ON DELETE SET NULL
+);

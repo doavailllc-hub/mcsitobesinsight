@@ -24,6 +24,10 @@ import {
   ChevronDown,
   Menu,
   X
+  ,ServerCog
+  ,Handshake
+  ,ChartNoAxesCombined
+  ,ClipboardCheck
 } from 'lucide-react';
 
 import {
@@ -32,6 +36,8 @@ import {
   getPermissions,
   refreshAccess
 } from '../lib/api';
+import insightLogo from '../assets/insight-logo.png';
+import NotificationCenter from './NotificationCenter';
 
 const sections = [
   {
@@ -45,6 +51,9 @@ const sections = [
     label: 'Organization',
     items: [
       ['Key People', '/people', Users, 'people.view'],
+      ['Partner Management', '/partners', Handshake, 'partner.admin'],
+      ['Partner Operations', '/partner-operations', ChartNoAxesCombined, 'partner.admin'],
+      ['Meetings & Decisions', '/partner-governance', ClipboardCheck, 'partner.admin'],
       ['Products', '/products', Boxes, 'products.view']
     ]
   },
@@ -88,6 +97,7 @@ const sections = [
   {
     label: 'Administration',
     items: [
+      ['Programming', '/programming', ServerCog, 'programming.admin'],
       ['Users & Access', '/users', ShieldCheck, 'users.view'],
       ['Audit Log', '/audit', ScrollText, 'audit.view'],
       ['Settings', '/settings', Settings, 'users.manage']
@@ -170,7 +180,7 @@ export default function Layout() {
   return (
     <div className="app-shell">
       <header className="mobile-topbar">
-        <div className="brand"><div className="brand-mark">IM</div><div><strong>Insight</strong><span>MCSITOBES</span></div></div>
+        <div className="brand"><div className="brand-mark"><img src={insightLogo} alt="" /></div><div><strong>Insight</strong><span>MCSITOBES</span></div></div>
         <button onClick={() => setMobileNavOpen(true)} aria-label="Open navigation"><Menu size={22}/></button>
       </header>
       {mobileNavOpen && (
@@ -178,7 +188,7 @@ export default function Layout() {
       )}
       <aside className={`sidebar ${mobileNavOpen ? 'mobile-open' : ''}`}>
         <div className="brand">
-          <div className="brand-mark">IM</div>
+          <div className="brand-mark"><img src={insightLogo} alt="Insight logo" /></div>
           <div>
             <strong>Insight</strong>
             <span>MCSITOBES</span>
@@ -250,6 +260,7 @@ export default function Layout() {
       </aside>
 
       <main className="main">
+        <NotificationCenter className="admin-notifications" />
         <Outlet />
       </main>
     </div>

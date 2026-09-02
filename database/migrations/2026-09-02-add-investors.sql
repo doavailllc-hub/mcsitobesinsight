@@ -1,0 +1,42 @@
+CREATE TABLE IF NOT EXISTS finance_investors (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  company_id INT NOT NULL,
+  investor_name VARCHAR(180) NOT NULL,
+  phone VARCHAR(40),
+  email VARCHAR(180),
+  id_number VARCHAR(100),
+  investment_amount DECIMAL(15,2) NOT NULL,
+  interest_rate DECIMAL(8,4) NOT NULL,
+  interest_type ENUM('flat_amount','percentage') NOT NULL DEFAULT 'percentage',
+  monthly_interest_amount DECIMAL(15,2) NOT NULL,
+  investment_date DATE NOT NULL,
+  next_interest_date DATE NOT NULL,
+  payment_method VARCHAR(60) DEFAULT 'Bank transfer',
+  reference_no VARCHAR(100),
+  status ENUM('active','closed') NOT NULL DEFAULT 'active',
+  notes TEXT,
+  created_by INT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY ix_finance_investor_due (company_id,status,next_interest_date),
+  FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS finance_investor_interest_payments (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  investor_id INT NOT NULL,
+  receipt_number VARCHAR(100) NOT NULL UNIQUE,
+  amount DECIMAL(15,2) NOT NULL,
+  payment_date DATE NOT NULL,
+  interest_for_date DATE NOT NULL,
+  periods_count INT NOT NULL DEFAULT 1,
+  payment_method VARCHAR(60) NOT NULL DEFAULT 'Bank transfer',
+  reference_no VARCHAR(100),
+  notes TEXT,
+  paid_by INT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  KEY ix_investor_interest_payment (investor_id,payment_date),
+  FOREIGN KEY (investor_id) REFERENCES finance_investors(id) ON DELETE CASCADE,
+  FOREIGN KEY (paid_by) REFERENCES users(id) ON DELETE SET NULL
+);
