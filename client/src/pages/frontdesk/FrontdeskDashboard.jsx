@@ -19,7 +19,7 @@ export default function FrontdeskDashboard({ navigate }) {
     </section>
     <section className="fd-quick-actions">
       <div><strong>Quick actions</strong><span>Start the most common front-desk tasks</span></div>
-      <button onClick={() => navigate('customers')}><UserPlus size={17}/><span><strong>Add customer</strong><small>Create a customer account</small></span><ArrowRight size={15}/></button>
+      <button onClick={() => navigate('loans')}><UserPlus size={17}/><span><strong>New loan</strong><small>Register for admin approval</small></span><ArrowRight size={15}/></button>
       <button onClick={() => navigate('collections')}><BadgeIndianRupee size={17}/><span><strong>Collect interest</strong><small>Open due collection list</small></span><ArrowRight size={15}/></button>
     </section>
     <div className="fd-dashboard-columns">
