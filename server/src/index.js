@@ -5727,7 +5727,7 @@ app.get('/api/collections/summary', requireCollectionAccess, safe(async (req, re
             COALESCE(SUM(principal_amount),0) principal_outstanding,
             COALESCE(SUM(monthly_interest_amount),0) monthly_interest,
             COALESCE(SUM(next_interest_date<=CURDATE()),0) due_now
-     FROM collection_customers WHERE status='active' AND company_id IN (${placeholders})`, ids
+     FROM collection_customers WHERE status='active' AND approval_status='approved' AND company_id IN (${placeholders})`, ids
   );
   const [payments] = await q(
     `SELECT COALESCE(SUM(p.amount),0) collected_this_month
@@ -5749,7 +5749,7 @@ app.get('/api/collections/dashboard', requireCollectionAccess, safe(async (req, 
        COALESCE(SUM(CASE WHEN next_interest_date<=CURDATE() THEN monthly_interest_amount ELSE 0 END),0) expected_now,
        COALESCE(SUM(CASE WHEN next_interest_date=CURDATE() THEN monthly_interest_amount ELSE 0 END),0) expected_today
      FROM collection_customers
-     WHERE status='active' AND company_id IN (${placeholders})`, ids
+     WHERE status='active' AND approval_status='approved' AND company_id IN (${placeholders})`, ids
   );
   const [todayPayments] = await q(
     `SELECT COALESCE(SUM(cp.amount),0) collected_today,COUNT(*) payments_today
@@ -5761,7 +5761,7 @@ app.get('/api/collections/dashboard', requireCollectionAccess, safe(async (req, 
     `SELECT cc.id,cc.customer_name,cc.phone,cc.next_interest_date,cc.monthly_interest_amount,
             cc.id_card_number,c.currency,DATEDIFF(CURDATE(),cc.next_interest_date) days_overdue
      FROM collection_customers cc JOIN companies c ON c.id=cc.company_id
-     WHERE cc.status='active' AND cc.company_id IN (${placeholders}) AND cc.next_interest_date<=CURDATE()
+     WHERE cc.status='active' AND cc.approval_status='approved' AND cc.company_id IN (${placeholders}) AND cc.next_interest_date<=CURDATE()
      ORDER BY cc.next_interest_date,cc.customer_name LIMIT 8`, ids
   );
   const recentPayments = await q(
@@ -5786,7 +5786,7 @@ app.get('/api/collections/reminders', requireCollectionAccess, safe(async (req, 
             cc.monthly_interest_amount,cc.principal_amount,c.name company_name,c.currency,
             DATEDIFF(cc.next_interest_date,CURDATE()) days_until_due
      FROM collection_customers cc JOIN companies c ON c.id=cc.company_id
-     WHERE cc.status='active' AND cc.company_id IN (${placeholders})
+     WHERE cc.status='active' AND cc.approval_status='approved' AND cc.company_id IN (${placeholders})
        AND cc.next_interest_date<=DATE_ADD(CURDATE(),INTERVAL 7 DAY)
      ORDER BY cc.next_interest_date,cc.customer_name`, ids
   );
@@ -5807,7 +5807,7 @@ app.get('/api/collections/admin-dashboard', requireCollectionAccess, safe(async 
             COALESCE(SUM(monthly_interest_amount),0) monthly_interest,
             COALESCE(SUM(next_interest_date<CURDATE()),0) overdue_customers,
             COALESCE(SUM(CASE WHEN next_interest_date<CURDATE() THEN monthly_interest_amount ELSE 0 END),0) overdue_value
-     FROM collection_customers WHERE status='active' AND company_id IN (${ph})`, ids
+     FROM collection_customers WHERE status='active' AND approval_status='approved' AND company_id IN (${ph})`, ids
   );
   const [month] = await q(
     `SELECT COALESCE(SUM(cp.amount),0) collected_this_month,COUNT(*) receipts_this_month
@@ -5822,14 +5822,14 @@ app.get('/api/collections/admin-dashboard', requireCollectionAccess, safe(async 
             COALESCE(SUM(cc.next_interest_date<CURDATE()),0) overdue_customers,
             COALESCE(SUM(CASE WHEN cc.next_interest_date<CURDATE() THEN cc.monthly_interest_amount ELSE 0 END),0) overdue_value,
             COALESCE((SELECT SUM(cp.amount) FROM collection_payments cp JOIN collection_customers x ON x.id=cp.customer_id WHERE x.company_id=c.id AND (cp.status IS NULL OR cp.status='posted') AND DATE_FORMAT(cp.payment_date,'%Y-%m')=DATE_FORMAT(CURDATE(),'%Y-%m')),0) collected_this_month
-     FROM companies c LEFT JOIN collection_customers cc ON cc.company_id=c.id AND cc.status='active'
+     FROM companies c LEFT JOIN collection_customers cc ON cc.company_id=c.id AND cc.status='active' AND cc.approval_status='approved'
      WHERE c.id IN (${ph}) GROUP BY c.id,c.name,c.currency ORDER BY overdue_value DESC,c.name`, ids
   );
   const high_risk_customers = await q(
     `SELECT cc.id,cc.customer_name,cc.phone,cc.next_interest_date,cc.principal_amount,cc.monthly_interest_amount,
             DATEDIFF(CURDATE(),cc.next_interest_date) days_overdue,c.name company_name,c.currency
      FROM collection_customers cc JOIN companies c ON c.id=cc.company_id
-     WHERE cc.status='active' AND cc.next_interest_date<CURDATE() AND cc.company_id IN (${ph})
+     WHERE cc.status='active' AND cc.approval_status='approved' AND cc.next_interest_date<CURDATE() AND cc.company_id IN (${ph})
      ORDER BY days_overdue DESC,cc.principal_amount DESC LIMIT 12`, ids
   );
   const recent_voids = await q(
@@ -5846,7 +5846,12 @@ app.get('/api/collections/admin-dashboard', requireCollectionAccess, safe(async 
        AND cp.payment_date>=DATE_SUB(CURDATE(),INTERVAL 30 DAY)
      GROUP BY cp.collected_by,u.name ORDER BY collected_amount DESC`, ids
   );
-  res.json({ metrics: { ...portfolio, ...month }, companies, high_risk_customers, recent_voids, staff_activity });
+  const pending_applications = await q(
+    `SELECT cc.id,cc.customer_name,cc.phone,cc.id_card_number,cc.principal_amount,cc.interest_rate,cc.interest_type,cc.monthly_interest_amount,cc.money_given_date,cc.created_at,c.name company_name,c.currency,u.name submitted_by_name
+     FROM collection_customers cc JOIN companies c ON c.id=cc.company_id LEFT JOIN users u ON u.id=cc.submitted_by
+     WHERE cc.approval_status='pending' AND cc.company_id IN (${ph}) ORDER BY cc.created_at`, ids
+  );
+  res.json({ metrics: { ...portfolio, ...month }, companies, high_risk_customers, recent_voids, staff_activity, pending_applications });
 }));
 
 app.get('/api/collections/customers', requireCollectionAccess, safe(async (req, res) => {
@@ -5930,13 +5935,14 @@ app.post('/api/collections/customers', requireCollectionAccess, fileUpload.singl
     const result = await q(
       `INSERT INTO collection_customers
        (company_id,customer_name,phone,address,id_card_number,id_card_storage_key,id_card_original_name,id_card_mime_type,
-        principal_amount,interest_rate,interest_type,monthly_interest_amount,money_given_date,next_interest_date,notes,created_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        principal_amount,interest_rate,interest_type,monthly_interest_amount,money_given_date,next_interest_date,status,approval_status,submitted_by,notes,created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [companyId,customerName,text(req.body.phone),text(req.body.address),idCardNumber,key,req.file?.originalname || null,
-       req.file?.mimetype || null,principal,rate,interestType,monthlyInterest,givenDate,givenDate,text(req.body.notes),req.user.id]
+       req.file?.mimetype || null,principal,rate,interestType,monthlyInterest,givenDate,givenDate,'active',req.user.role==='frontdesk'?'pending':'approved',req.user.id,text(req.body.notes),req.user.id]
     );
-    await audit(req, 'Added collection customer', 'collection_customer', customerName);
-    res.status(201).json({ id: result.insertId });
+    await audit(req, req.user.role==='frontdesk'?'Submitted loan for approval':'Added approved loan', 'collection_customer', customerName);
+    if(req.user.role==='frontdesk')await notifyRole('group_admin','Loan approval required',`${customerName} · principal ${principal}`,'action','/finance/collections',`loan-approval-${result.insertId}`);
+    res.status(201).json({ id: result.insertId,approval_status:req.user.role==='frontdesk'?'pending':'approved' });
   } catch (err) {
     if (key) await s3.send(new DeleteObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key })).catch(() => {});
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'This ID card number already exists for the company.' });
@@ -5949,6 +5955,7 @@ app.post('/api/collections/customers/:id/payments', requireCollectionAccess, saf
   if (!customer) return res.status(404).json({ message: 'Customer not found.' });
   await ensureCollectionCompany(req, customer.company_id);
   if (customer.status !== 'active') return res.status(409).json({ message: 'This collection account is closed.' });
+  if (customer.approval_status !== 'approved') return res.status(409).json({ message: 'This loan must be approved before collecting interest.' });
   const periodsCount = Math.max(1,Math.min(24,Math.floor(number(req.body.periods_count,1))));
   const penaltyAmount = Math.max(0,number(req.body.penalty_amount,0));
   const amount = number(req.body.amount, Number(customer.monthly_interest_amount)*periodsCount+penaltyAmount);
@@ -5978,6 +5985,22 @@ app.patch('/api/collections/customers/:id/status', requireCollectionAccess, safe
   await q('UPDATE collection_customers SET status=? WHERE id=?', [status, customer.id]);
   await audit(req, `${status === 'closed' ? 'Closed' : 'Reopened'} collection account`, 'collection_customer', customer.customer_name);
   res.json({ ok: true });
+}));
+
+app.patch('/api/collections/customers/:id/approval', requireCollectionAccess, safe(async(req,res)=>{
+  if(req.user?.role==='frontdesk')return res.status(403).json({message:'Administrator approval is required.'});
+  const decision=['approved','rejected'].includes(req.body.approval_status)?req.body.approval_status:null;
+  if(!decision)return res.status(400).json({message:'Choose approve or reject.'});
+  const [customer]=await q('SELECT * FROM collection_customers WHERE id=?',[req.params.id]);
+  if(!customer)return res.status(404).json({message:'Loan application not found.'});
+  await ensureCollectionCompany(req,customer.company_id);
+  if(customer.approval_status!=='pending')return res.status(409).json({message:'This loan application has already been reviewed.'});
+  const reason=text(req.body.rejection_reason);
+  if(decision==='rejected'&&!reason)return res.status(400).json({message:'A rejection reason is required.'});
+  await q('UPDATE collection_customers SET approval_status=?,reviewed_by=?,reviewed_at=NOW(),rejection_reason=? WHERE id=?',[decision,req.user.id,decision==='rejected'?reason:null,customer.id]);
+  await audit(req,`${decision==='approved'?'Approved':'Rejected'} loan application`,'collection_customer',customer.customer_name);
+  if(customer.submitted_by)await notifyUser(customer.submitted_by,`Loan ${decision}`,`${customer.customer_name}'s loan for ${customer.principal_amount} was ${decision}.`,decision==='approved'?'success':'error','/frontdesk',`loan-decision-${customer.id}-${decision}`);
+  res.json({ok:true});
 }));
 
 // ---------- FRONT-DESK OFFICE EXPENSES ----------

@@ -199,6 +199,7 @@ export default function App() {
           <Route path="collections/customers" element={<Collections />} />
           <Route path="investors" element={<Investors />} />
         </Route>
+        <Route path="/loans" element={protect('finance.view', <Collections />)} />
 
         <Route
           path="/partner-operations"
