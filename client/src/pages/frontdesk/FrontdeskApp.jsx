@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { BarChart3, BellRing, BookOpenText, ChevronRight, HandCoins, LayoutDashboard, LogOut, Menu, ReceiptIndianRupee, Settings, Users, WalletCards, X } from 'lucide-react';
+import { BarChart3, BellRing, BookOpenText, ChevronRight, CircleDollarSign, HandCoins, LayoutDashboard, LogOut, Menu, ReceiptIndianRupee, Settings, Users, WalletCards, X } from 'lucide-react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { clearSession, getUser } from '../../lib/api';
 import Collections from '../finance/Collections';
+import Investors from '../finance/Investors';
 import FrontdeskDashboard from './FrontdeskDashboard';
 import OfficeExpenses from './OfficeExpenses';
 import FrontdeskSettings from './FrontdeskSettings';
@@ -16,7 +17,7 @@ import NotificationCenter from '../../components/NotificationCenter';
 
 const sections = [
   { label: 'Overview', items: [{ key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
-  { label: 'Customer Operations', items: [{ key: 'customers', label: 'Customers', icon: Users }, { key: 'collections', label: 'Interest Collection', icon: HandCoins }, { key: 'reminders', label: 'Due Reminders', icon: BellRing }] },
+  { label: 'Interest Operations', items: [{ key: 'customers', label: 'Customers', icon: Users }, { key: 'collections', label: 'Interest Collection', icon: HandCoins }, { key: 'payouts', label: 'Interest Payouts', icon: CircleDollarSign }, { key: 'reminders', label: 'Due Reminders', icon: BellRing }] },
   { label: 'Cash & Expenses', items: [{ key: 'cashbook', label: 'Cashbook', icon: WalletCards }, { key: 'expenses', label: 'Office Expenses', icon: ReceiptIndianRupee }] },
   { label: 'Insights', items: [{ key: 'reports', label: 'Reports', icon: BarChart3 }] },
   { label: 'Administration', items: [{ key: 'settings', label: 'Settings', icon: Settings }] }
@@ -26,6 +27,7 @@ const pageCopy = {
   dashboard: ['TODAY’S WORKSPACE', 'Front-desk overview', 'Monitor customers, upcoming interest and collections from one place.'],
   customers: ['CUSTOMER OPERATIONS', 'Customers', 'Find customers, open complete profiles and manage active accounts.'],
   collections: ['DAILY COLLECTION', 'Interest collection', 'Prioritize due accounts and record monthly interest payments.'],
+  payouts: ['MONTHLY PAYOUTS', 'Interest payouts', 'Pay monthly interest on time to investors who provided money to the company.'],
   reminders: ['FOLLOW-UP WORKSPACE', 'Due reminders', 'Review overdue, due-today and upcoming customers, then contact them from one list.'],
   cashbook: ['CASH MANAGEMENT', 'Cashbook', 'Track opening cash, receipts, payments and daily closing balance.'],
   expenses: ['OFFICE OPERATIONS', 'Office expenses', 'Record and review petty cash and operating expenses.'],
@@ -59,6 +61,7 @@ export default function FrontdeskApp() {
       {page === 'dashboard' && <FrontdeskDashboard navigate={openPage} />}
       {page === 'customers' && <Collections key={`customers-${preference.default_company_id}`} frontdesk defaultFilter="all" showStats={false} defaultCompanyId={preference.default_company_id}/>} 
       {page === 'collections' && <Collections key={`collections-${preference.default_company_id}`} frontdesk defaultFilter="due" defaultCompanyId={preference.default_company_id}/>} 
+      {page === 'payouts' && <Investors key={`payouts-${preference.default_company_id}`} frontdesk defaultCompanyId={preference.default_company_id}/>} 
       {page === 'reminders' && <FrontdeskReminders navigate={openPage}/>} 
       {page === 'cashbook' && <Cashbook key={`cashbook-${preference.default_company_id}`} defaultCompanyId={preference.default_company_id}/>} 
       {page === 'expenses' && <OfficeExpenses key={`expenses-${preference.default_company_id}`} defaultCompanyId={preference.default_company_id}/>} 

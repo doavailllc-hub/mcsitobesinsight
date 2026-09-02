@@ -6181,7 +6181,6 @@ app.get('/api/frontdesk/login-history',requireCollectionAccess,safe(async(req,re
 // ---------- INVESTOR INTEREST PAYMENTS ----------
 
 app.get('/api/investors/overview', requireCollectionAccess, safe(async (req,res) => {
-  if (req.user?.role === 'frontdesk') return res.status(403).json({message:'Finance administration access is required.'});
   const ids=await collectionCompanyIds(req);
   if(!ids.length)return res.json({companies:[],investors:[],summary:{}});
   const ph=ids.map(()=>'?').join(',');
@@ -6202,7 +6201,6 @@ app.get('/api/investors/overview', requireCollectionAccess, safe(async (req,res)
 }));
 
 app.get('/api/investors/:id/payments', requireCollectionAccess, safe(async(req,res)=>{
-  if(req.user?.role==='frontdesk')return res.status(403).json({message:'Finance administration access is required.'});
   const [investor]=await q('SELECT company_id FROM finance_investors WHERE id=?',[req.params.id]);
   if(!investor)return res.status(404).json({message:'Investor not found.'});
   await ensureCollectionCompany(req,investor.company_id);
@@ -6210,7 +6208,6 @@ app.get('/api/investors/:id/payments', requireCollectionAccess, safe(async(req,r
 }));
 
 app.post('/api/investors', requireCollectionAccess, safe(async(req,res)=>{
-  if(req.user?.role==='frontdesk')return res.status(403).json({message:'Finance administration access is required.'});
   const companyId=Number(req.body.company_id),name=text(req.body.investor_name),amount=number(req.body.investment_amount),rate=number(req.body.interest_rate);
   const interestType=req.body.interest_type==='flat_amount'?'flat_amount':'percentage',date=text(req.body.investment_date),firstDue=text(req.body.next_interest_date)||date;
   await ensureCollectionCompany(req,companyId);
@@ -6222,7 +6219,6 @@ app.post('/api/investors', requireCollectionAccess, safe(async(req,res)=>{
 }));
 
 app.post('/api/investors/:id/payments', requireCollectionAccess, safe(async(req,res)=>{
-  if(req.user?.role==='frontdesk')return res.status(403).json({message:'Finance administration access is required.'});
   const [investor]=await q('SELECT * FROM finance_investors WHERE id=?',[req.params.id]);
   if(!investor)return res.status(404).json({message:'Investor not found.'});
   await ensureCollectionCompany(req,investor.company_id);
@@ -6234,7 +6230,6 @@ app.post('/api/investors/:id/payments', requireCollectionAccess, safe(async(req,
 }));
 
 app.patch('/api/investors/:id/status', requireCollectionAccess, safe(async(req,res)=>{
-  if(req.user?.role==='frontdesk')return res.status(403).json({message:'Finance administration access is required.'});
   const [investor]=await q('SELECT * FROM finance_investors WHERE id=?',[req.params.id]);if(!investor)return res.status(404).json({message:'Investor not found.'});await ensureCollectionCompany(req,investor.company_id);const status=req.body.status==='closed'?'closed':'active';await q('UPDATE finance_investors SET status=? WHERE id=?',[status,investor.id]);await audit(req,`${status==='closed'?'Closed':'Reopened'} investor account`,'finance_investor',investor.investor_name);res.json({ok:true});
 }));
 
