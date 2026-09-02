@@ -5846,11 +5846,12 @@ app.get('/api/collections/admin-dashboard', requireCollectionAccess, safe(async 
        AND cp.payment_date>=DATE_SUB(CURDATE(),INTERVAL 30 DAY)
      GROUP BY cp.collected_by,u.name ORDER BY collected_amount DESC`, ids
   );
-  const pending_applications = await q(
-    `SELECT cc.id,cc.customer_name,cc.phone,cc.id_card_number,cc.principal_amount,cc.interest_rate,cc.interest_type,cc.monthly_interest_amount,cc.money_given_date,cc.created_at,c.name company_name,c.currency,u.name submitted_by_name
+  const pendingRows = await q(
+    `SELECT cc.id,cc.customer_name,cc.phone,cc.address,cc.id_card_number,cc.id_card_storage_key,cc.id_card_original_name,cc.id_card_mime_type,cc.principal_amount,cc.interest_rate,cc.interest_type,cc.monthly_interest_amount,cc.money_given_date,cc.next_interest_date,cc.notes,cc.created_at,c.name company_name,c.currency,u.name submitted_by_name
      FROM collection_customers cc JOIN companies c ON c.id=cc.company_id LEFT JOIN users u ON u.id=cc.submitted_by
      WHERE cc.approval_status='pending' AND cc.company_id IN (${ph}) ORDER BY cc.created_at`, ids
   );
+  const pending_applications=await Promise.all(pendingRows.map(withIdCardUrl));
   res.json({ metrics: { ...portfolio, ...month }, companies, high_risk_customers, recent_voids, staff_activity, pending_applications });
 }));
 
@@ -5995,9 +5996,10 @@ app.patch('/api/collections/customers/:id/approval', requireCollectionAccess, sa
   if(!customer)return res.status(404).json({message:'Loan application not found.'});
   await ensureCollectionCompany(req,customer.company_id);
   if(customer.approval_status!=='pending')return res.status(409).json({message:'This loan application has already been reviewed.'});
-  const reason=text(req.body.rejection_reason);
+  const reason=text(req.body.rejection_reason),identityVerified=req.body.identity_verified===true,amountVerified=req.body.amount_verified===true,verificationNotes=text(req.body.verification_notes);
   if(decision==='rejected'&&!reason)return res.status(400).json({message:'A rejection reason is required.'});
-  await q('UPDATE collection_customers SET approval_status=?,reviewed_by=?,reviewed_at=NOW(),rejection_reason=? WHERE id=?',[decision,req.user.id,decision==='rejected'?reason:null,customer.id]);
+  if(decision==='approved'&&(!identityVerified||!amountVerified))return res.status(400).json({message:'Identity document and loan amount must both be verified before approval.'});
+  await q('UPDATE collection_customers SET approval_status=?,reviewed_by=?,reviewed_at=NOW(),rejection_reason=?,identity_verified=?,amount_verified=?,verification_notes=? WHERE id=?',[decision,req.user.id,decision==='rejected'?reason:null,identityVerified?1:0,amountVerified?1:0,verificationNotes,customer.id]);
   await audit(req,`${decision==='approved'?'Approved':'Rejected'} loan application`,'collection_customer',customer.customer_name);
   if(customer.submitted_by)await notifyUser(customer.submitted_by,`Loan ${decision}`,`${customer.customer_name}'s loan for ${customer.principal_amount} was ${decision}.`,decision==='approved'?'success':'error','/frontdesk',`loan-decision-${customer.id}-${decision}`);
   res.json({ok:true});
