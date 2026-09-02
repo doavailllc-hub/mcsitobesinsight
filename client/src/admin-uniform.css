@@ -1,0 +1,101 @@
+/* Unified admin workspace — intentionally loaded after all module styles. */
+:root{
+  --admin-bg:#f6f8fb;
+  --admin-surface:#fff;
+  --admin-border:#e3e8ef;
+  --admin-text:#172033;
+  --admin-muted:#667085;
+  --admin-primary:#315bea;
+  --admin-hero-a:#17233b;
+  --admin-hero-b:#293e70;
+  --admin-radius:14px;
+  --admin-shadow:0 4px 16px rgba(16,24,40,.055);
+}
+
+.main{min-width:0;background:var(--admin-bg)}
+.main>.page{width:100%;max-width:1660px;min-width:0;margin:0 auto;padding:28px 30px 56px}
+
+/* One header language for every primary admin module. */
+.main>.page>header[class*="-hero"]{
+  position:relative;
+  isolation:isolate;
+  box-sizing:border-box;
+  width:100%;
+  min-height:124px;
+  margin:0 0 18px;
+  padding:24px 26px;
+  overflow:hidden;
+  border:1px solid rgba(255,255,255,.1);
+  border-radius:16px;
+  background:linear-gradient(120deg,var(--admin-hero-a),var(--admin-hero-b))!important;
+  color:#fff;
+  box-shadow:0 12px 30px rgba(23,35,59,.13);
+}
+.main>.page>header[class*="-hero"]:after{
+  position:absolute;z-index:-1;right:8%;top:-115px;width:250px;height:250px;
+  border:1px solid rgba(255,255,255,.09);border-radius:50%;background:rgba(255,255,255,.025);content:"";
+}
+.main>.page>header[class*="-hero"] .eyebrow{margin:0 0 5px!important;color:#bfccef!important;font-size:9px!important;letter-spacing:.13em}
+.main>.page>header[class*="-hero"] h1{margin:0!important;color:#fff!important;font-size:26px!important;line-height:1.2;letter-spacing:-.025em}
+.main>.page>header[class*="-hero"] p:last-child{max-width:720px;margin:6px 0 0!important;color:#d9e1f3!important;font-size:11px!important;line-height:1.55}
+.main>.page>header[class*="-hero"]>span:first-child,
+.main>.page>header[class*="-hero"]>div[class$="-icon"]{width:46px;height:46px;display:grid;place-items:center;flex:0 0 46px;border:1px solid rgba(255,255,255,.14)!important;border-radius:11px!important;background:rgba(255,255,255,.1)!important;color:#fff!important}
+.main>.page>header[class*="-hero"] button{min-height:40px;padding:0 14px;border:1px solid rgba(255,255,255,.2);border-radius:9px;background:#fff;color:#24365d;font:inherit;font-size:11px;font-weight:700;box-shadow:none}
+.main>.page>header[class*="-hero"]>span:not(:first-child){padding:8px 11px;border:1px solid rgba(255,255,255,.16);border-radius:9px;background:rgba(255,255,255,.08);color:#e8edfa}
+
+/* Predictable vertical rhythm. */
+.main>.page>:not(header)+:not(.finance-modal-backdrop){box-sizing:border-box}
+.main :is(.dashboard-grid,.companies-grid,.people-grid,.products-grid,.office-grid,.employee-grid,.bank-grid,.settings-grid,.programming-grid,.partner-ops-grid){gap:14px}
+
+/* KPI families use the same surface, spacing, and typography. */
+.main :is(.stats-grid,.company-stats,.people-stats,.product-stats,.office-stats,.employee-stats,.bank-stats,.payroll-stats,.governance-stats,.partner-admin-stats,.partner-kpis,.collection-stats){gap:12px;margin:0 0 18px}
+.main :is(.stat-card,.company-stat,.people-stat,.product-stat,.office-stat,.employee-stat,.bank-stat,.payroll-stat,.governance-stats>div,.partner-admin-stats>div,.partner-kpi,.finance-stat){min-width:0;min-height:92px;padding:15px;border:1px solid var(--admin-border);border-radius:var(--admin-radius);background:var(--admin-surface);box-shadow:var(--admin-shadow)}
+.main :is(.stat-card,.company-stat,.people-stat,.product-stat,.office-stat,.employee-stat,.bank-stat,.payroll-stat,.governance-stats>div,.partner-admin-stats>div,.partner-kpi,.finance-stat) small{color:var(--admin-muted);font-size:9px}
+.main :is(.stat-card,.company-stat,.people-stat,.product-stat,.office-stat,.employee-stat,.bank-stat,.payroll-stat,.governance-stats>div,.partner-admin-stats>div,.partner-kpi,.finance-stat) strong{color:var(--admin-text);font-size:18px;line-height:1.25}
+
+/* Toolbars and filters align to one 42px control grid. */
+.main :is(.toolbar,.finance-page-toolbar,.companies-toolbar,.people-toolbar,.products-toolbar,.office-toolbar,.employee-toolbar,.bank-toolbar,.payroll-toolbar,.programming-toolbar){box-sizing:border-box;width:100%;min-height:62px;display:flex;align-items:center;gap:10px;margin:0 0 14px;padding:10px 12px;border:1px solid var(--admin-border);border-radius:12px;background:var(--admin-surface);box-shadow:0 2px 8px rgba(16,24,40,.025)}
+.main :is(.toolbar,.finance-page-toolbar,.companies-toolbar,.people-toolbar,.products-toolbar,.office-toolbar,.employee-toolbar,.bank-toolbar,.payroll-toolbar,.programming-toolbar) :is(input,select,button){min-height:40px;border-radius:9px;font:inherit;font-size:11px}
+
+/* One card and table treatment throughout the admin app. */
+.main :is(.panel,.table-card,.finance-card,.finance-list-card,.company-card,.people-card,.product-card,.office-card,.employee-card,.bank-card,.settings-card,.program-card,.partner-admin-list,.partner-ledger,.governance-list,.collection-admin-card){box-sizing:border-box;border:1px solid var(--admin-border)!important;border-radius:var(--admin-radius)!important;background:var(--admin-surface)!important;box-shadow:var(--admin-shadow)!important}
+.main :is(.table-scroll,.finance-table-scroll,.partner-table-scroll){width:100%;min-width:0;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.main table{border-collapse:collapse}
+.main :is(.data-table,.finance-table,.partner-ledger table,.partner-admin-list table){width:100%;color:var(--admin-text)}
+.main :is(.data-table,.finance-table,.partner-ledger table,.partner-admin-list table) th{height:42px;padding:10px 13px;border-bottom:1px solid var(--admin-border);background:#f8fafc;color:#657087;font-size:9px;font-weight:700;letter-spacing:.045em;text-align:left;text-transform:uppercase;white-space:nowrap}
+.main :is(.data-table,.finance-table,.partner-ledger table,.partner-admin-list table) td{min-height:48px;padding:12px 13px;border-bottom:1px solid #edf0f4;color:#344054;font-size:11px;vertical-align:middle}
+.main :is(.data-table,.finance-table,.partner-ledger table,.partner-admin-list table) tbody tr:last-child td{border-bottom:0}
+.main :is(.data-table,.finance-table,.partner-ledger table,.partner-admin-list table) tbody tr:hover td{background:#fbfcfe}
+.main .finance-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:nowrap}
+.main .finance-actions button{min-height:34px;padding:0 11px;white-space:nowrap}
+
+/* Unified overlays. */
+.main :is(.modal-backdrop,.finance-modal-backdrop,.partner-admin-modal-bg,.governance-modal-bg,.programming-modal-backdrop){padding:22px;background:rgba(15,23,42,.52);backdrop-filter:blur(3px)}
+.main :is(.modal,.finance-transaction-modal,.partner-admin-modal,.governance-modal,.programming-modal){border:1px solid #e2e7ef;border-radius:16px;background:#fff;box-shadow:0 28px 75px rgba(15,23,42,.24)}
+.main :is(.modal,.finance-transaction-modal,.partner-admin-modal,.governance-modal,.programming-modal)>header{padding:19px 22px;border-bottom:1px solid #e8ecf2;background:#fff}
+.main :is(.modal,.finance-transaction-modal,.partner-admin-modal,.governance-modal,.programming-modal)>footer{padding:14px 22px;border-top:1px solid #e8ecf2;background:#fafbfc}
+
+.main :is(.empty-state,.collection-empty,.collection-admin-empty,.partner-empty,.programming-empty){color:#7a8699;text-align:center}
+
+/* Finance is nested, but follows the same canvas and spacing. */
+body .main .finance-shell.page{max-width:1660px!important;padding:28px 30px 56px!important;background:var(--admin-bg)!important}
+body .main .finance-shell .finance-workspace-header{min-height:124px!important;margin:0!important;padding:24px 26px!important;border-radius:16px!important;background:linear-gradient(120deg,var(--admin-hero-a),var(--admin-hero-b))!important;box-shadow:0 12px 30px rgba(23,35,59,.13)!important}
+body .main .finance-shell .finance-workspace-copy .eyebrow{color:#bfccef!important}
+body .main .finance-shell .finance-workspace-copy h1{color:#fff!important;font-size:26px!important}
+body .main .finance-shell .finance-workspace-copy>p:last-child{color:#d9e1f3!important}
+body .main .finance-shell .finance-workspace-status{border-color:rgba(255,255,255,.16)!important;background:rgba(255,255,255,.08)!important;color:#e8edfa!important}
+
+@media(max-width:1100px){
+  .main>.page,body .main .finance-shell.page{padding:22px 22px 44px!important}
+  .main :is(.stats-grid,.company-stats,.people-stats,.product-stats,.office-stats,.employee-stats,.bank-stats,.payroll-stats,.governance-stats,.partner-admin-stats,.partner-kpis,.collection-stats){grid-template-columns:repeat(2,minmax(0,1fr))!important}
+}
+@media(max-width:700px){
+  .main>.page,body .main .finance-shell.page{padding:16px 14px 36px!important}
+  .main>.page>header[class*="-hero"],body .main .finance-shell .finance-workspace-header{min-height:auto!important;padding:19px!important;border-radius:13px!important}
+  .main>.page>header[class*="-hero"] h1{font-size:22px!important}
+  .main :is(.stats-grid,.company-stats,.people-stats,.product-stats,.office-stats,.employee-stats,.bank-stats,.payroll-stats,.governance-stats,.partner-admin-stats,.partner-kpis,.collection-stats){grid-template-columns:1fr!important}
+  .main :is(.toolbar,.finance-page-toolbar,.companies-toolbar,.people-toolbar,.products-toolbar,.office-toolbar,.employee-toolbar,.bank-toolbar,.payroll-toolbar,.programming-toolbar){align-items:stretch;flex-direction:column}
+  .main :is(.toolbar,.finance-page-toolbar,.companies-toolbar,.people-toolbar,.products-toolbar,.office-toolbar,.employee-toolbar,.bank-toolbar,.payroll-toolbar,.programming-toolbar)>*{width:100%!important;max-width:none!important}
+  .main :is(.modal-backdrop,.finance-modal-backdrop,.partner-admin-modal-bg,.governance-modal-bg,.programming-modal-backdrop){align-items:end!important;padding:0!important}
+  .main :is(.modal,.finance-transaction-modal,.partner-admin-modal,.governance-modal,.programming-modal){width:100%!important;max-height:94vh;border-radius:16px 16px 0 0!important}
+}
