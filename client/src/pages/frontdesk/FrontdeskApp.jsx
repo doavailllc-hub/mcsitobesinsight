@@ -18,7 +18,7 @@ import NotificationCenter from '../../components/NotificationCenter';
 
 const sections = [
   { label: 'Overview', items: [{ key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
-  { label: 'Lending', items: [{ key: 'customers', label: 'Customers', icon: Users }, { key: 'loans', label: 'Loans', icon: BookOpenText }, { key: 'collections', label: 'Interest Collection', icon: HandCoins }, { key: 'payouts', label: 'Interest Payouts', icon: CircleDollarSign }, { key: 'reminders', label: 'Due Reminders', icon: BellRing }] },
+  { label: 'Lending', items: [{ key: 'loans', label: 'Loans', icon: BookOpenText }, { key: 'customers', label: 'Customers', icon: Users }, { key: 'collections', label: 'Interest Collection', icon: HandCoins }, { key: 'payouts', label: 'Interest Payouts', icon: CircleDollarSign }, { key: 'reminders', label: 'Due Reminders', icon: BellRing }] },
   { label: 'Cash & Expenses', items: [{ key: 'cashbook', label: 'Cashbook', icon: WalletCards }, { key: 'expenses', label: 'Office Expenses', icon: ReceiptIndianRupee }] },
   { label: 'Insights', items: [{ key: 'reports', label: 'Reports', icon: BarChart3 }] },
   { label: 'Administration', items: [{ key: 'settings', label: 'Settings', icon: Settings }] }
