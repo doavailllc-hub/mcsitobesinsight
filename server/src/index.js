@@ -4077,9 +4077,25 @@ app.get(
   })
 );
 
+// Invoice-only front-desk access follows the existing active-company scope.
+const requireSalesPermission = permissionKey => safe(async (req, res, next) => {
+  if (req.user?.role !== 'frontdesk') {
+    return requireEffectivePermission(permissionKey)(req, res, next);
+  }
+  const ids = await collectionCompanyIds(req);
+  req.access = {
+    globalRole: 'frontdesk',
+    globalPermissions: [],
+    companyAccess: Object.fromEntries(ids.map(id => [id, {
+      permissions: ['finance.view', 'finance.create', 'finance.edit']
+    }]))
+  };
+  next();
+});
+
 app.get(
   '/api/sales-invoices',
-  requireEffectivePermission('finance.view'),
+  requireSalesPermission('finance.view'),
   safe(async (req, res) => {
     const access =
       req.access ||
@@ -4191,26 +4207,10 @@ app.get(
 
 app.get(
   '/api/sales-invoices/:id',
-  requireEffectivePermission('finance.view'),
+  requireSalesPermission('finance.view'),
   safe(async (req, res) => {
     const invoiceId =
       Number(req.params.id);
-const [invoiceSettings] = await q(
-  `SELECT *
-   FROM finance_invoice_settings
-   WHERE company_id=?
-   LIMIT 1`,
-  [invoice.company_id]
-);
-
-Return:
-
-res.json({
-  invoice,
-  items,
-  payments,
-  invoice_settings: invoiceSettings || null
-});
     const [invoice] = await q(
       `SELECT
          si.*,
@@ -4313,11 +4313,11 @@ res.json({
       [invoiceId]
     );
 
-    res.json({
-      invoice,
-      items,
-      payments
-    });
+    const [invoiceSettings] = await q(
+      'SELECT * FROM finance_invoice_settings WHERE company_id=? LIMIT 1',
+      [invoice.company_id]
+    );
+    res.json({ invoice, items, payments, invoice_settings: invoiceSettings || null });
   })
 );
 
@@ -4325,7 +4325,7 @@ res.json({
 
 app.post(
   '/api/sales-invoices',
-  requireEffectivePermission(
+  requireSalesPermission(
     'finance.create'
   ),
   requireBodyCompanyAccess(
@@ -4552,7 +4552,7 @@ app.post(
 
 app.put(
   '/api/sales-invoices/:id',
-  requireEffectivePermission(
+  requireSalesPermission(
     'finance.edit'
   ),
   safe(async (req, res) => {
@@ -4761,7 +4761,7 @@ app.put(
 
 app.put(
   '/api/sales-invoices/:id/issue',
-  requireEffectivePermission(
+  requireSalesPermission(
     'finance.edit'
   ),
   safe(async (req, res) => {
@@ -4855,7 +4855,7 @@ app.put(
 
 app.put(
   '/api/sales-invoices/:id/cancel',
-  requireEffectivePermission(
+  requireSalesPermission(
     'finance.edit'
   ),
   safe(async (req, res) => {

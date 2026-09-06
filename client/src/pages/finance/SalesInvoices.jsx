@@ -44,7 +44,7 @@ const emptyForm = {
   items: [{ ...emptyItem }]
 };
 
-export default function SalesInvoices() {
+export default function SalesInvoices({ frontdesk = false, defaultCompanyId = null, onView } = {}) {
   const [rows, setRows] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [query, setQuery] = useState('');
@@ -58,15 +58,16 @@ export default function SalesInvoices() {
   const user = getUser();
   const permissions = new Set(getPermissions());
   const isGroupAdmin = user?.role === 'group_admin';
-  const canCreate = isGroupAdmin || permissions.has('finance.create');
-  const canEdit = isGroupAdmin || permissions.has('finance.edit');
+  const isFrontdesk = frontdesk && user?.role === 'frontdesk';
+  const canCreate = isGroupAdmin || isFrontdesk || permissions.has('finance.create');
+  const canEdit = isGroupAdmin || isFrontdesk || permissions.has('finance.edit');
 
   const load = async () => {
     try {
       const response = await api.get('/sales-invoices');
       setRows(response.data || []);
-    } catch {
-      setRows([]);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Unable to load sales invoices.');
     }
   };
 
@@ -91,11 +92,12 @@ export default function SalesInvoices() {
   const openCreate = async () => {
     setError('');
     try {
-      const response = await api.get('/company-options');
+      const response = await api.get(isFrontdesk ? '/collections/companies' : '/company-options');
       setCompanies(response.data || []);
       setEditingId(null);
       setForm({
         ...emptyForm,
+        company_id: response.data?.some(company => Number(company.id) === Number(defaultCompanyId)) ? defaultCompanyId : '',
         items: [{ ...emptyItem }]
       });
       setOpen(true);
@@ -114,7 +116,7 @@ export default function SalesInvoices() {
     try {
       const [companyResponse, detailResponse] =
         await Promise.all([
-          api.get('/company-options'),
+          api.get(isFrontdesk ? '/collections/companies' : '/company-options'),
           api.get(`/sales-invoices/${row.id}`)
         ]);
 
@@ -318,6 +320,7 @@ export default function SalesInvoices() {
 
   return (
     <>
+      {error && !open && <div role="alert" className="error">{error}</div>}
       <div className="toolbar">
         <div className="search">
           <Search size={17} />
@@ -439,13 +442,13 @@ export default function SalesInvoices() {
 
                     <td>
                       <div className="finance-actions">
-                        <Link
+                        {onView ? <button className="finance-icon-btn" title="View invoice" onClick={() => onView(row.id)}><Eye size={15} /></button> : <Link
                           to={`/finance/invoices/${row.id}`}
                           className="finance-icon-btn"
                           title="View invoice"
                         >
                           <Eye size={15} />
-                        </Link>
+                        </Link>}
 
                         <button
                           type="button"

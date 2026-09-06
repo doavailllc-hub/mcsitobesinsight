@@ -61,6 +61,7 @@ const sections = [
     label: 'Finance',
     items: [
       ['Finance & Accounts', '/finance', Wallet, 'finance.view'],
+      ['Sales', '/finance/invoices', ScrollText, 'finance.view'],
       ['Loans', '/loans', BadgeIndianRupee, 'finance.view'],
       ['Investors', '/finance/investors', Handshake, 'finance.view'],
       ['Bank Accounts', '/bank', Landmark, 'bank.view'],

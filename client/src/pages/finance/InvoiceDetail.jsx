@@ -14,19 +14,20 @@ const money = (value, currency = 'INR') => new Intl.NumberFormat('en-IN', {
 const formatDate = value => value ? new Date(`${String(value).slice(0, 10)}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Not set';
 const titleCase = value => String(value || '').replaceAll('_', ' ').replace(/\b\w/g, char => char.toUpperCase());
 
-export default function InvoiceDetail() {
-  const { id } = useParams();
+export default function InvoiceDetail({ invoiceId, onBack, frontdesk = false } = {}) {
+  const { id: routeId } = useParams();
+  const id = invoiceId || routeId;
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const user = getUser();
   const permissions = new Set(getPermissions());
-  const canEdit = user?.role === 'group_admin' || permissions.has('finance.edit');
+  const canEdit = user?.role === 'group_admin' || (frontdesk && user?.role === 'frontdesk') || permissions.has('finance.edit');
 
   const load = async () => {
     try { setLoading(true); setData((await api.get(`/sales-invoices/${id}`)).data); }
-    catch (err) { window.alert(err.response?.data?.message || 'Unable to load invoice.'); navigate('/finance/invoices', { replace: true }); }
+    catch (err) { window.alert(err.response?.data?.message || 'Unable to load invoice.'); onBack ? onBack() : navigate('/finance/invoices', { replace: true }); }
     finally { setLoading(false); }
   };
   useEffect(() => { load(); }, [id]);
@@ -54,12 +55,12 @@ export default function InvoiceDetail() {
   const invoice = data.invoice;
   const isOverdue = invoice.status === 'issued' && Number(invoice.balance_amount) > 0 && invoice.due_date && new Date(invoice.due_date) < new Date(new Date().toDateString());
   const displayStatus = isOverdue ? 'overdue' : invoice.status;
-  const canReceivePayment = ['issued', 'partially_paid'].includes(invoice.status);
+  const canReceivePayment = !frontdesk && ['issued', 'partially_paid'].includes(invoice.status);
 
   return <div className="invoice-workspace">
     <div className="invoice-topbar no-print">
       <div className="invoice-topbar-title">
-        <Link to="/finance/invoices" className="invoice-back"><ArrowLeft size={17} /></Link>
+        <button className="invoice-back" aria-label="Back to sales" onClick={() => onBack ? onBack() : navigate('/finance/invoices')}><ArrowLeft size={17} /></button>
         <div><span>Sales invoice</span><div><h2>{invoice.invoice_number}</h2><button onClick={copyNumber} title="Copy invoice number">{copied ? <Check size={14} /> : <Clipboard size={14} />}</button></div></div>
         <span className={`finance-badge ${displayStatus}`}>{titleCase(displayStatus)}</span>
       </div>

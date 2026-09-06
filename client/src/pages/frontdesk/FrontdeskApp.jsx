@@ -3,6 +3,8 @@ import { BarChart3, BellRing, BookOpenText, ChevronRight, CircleDollarSign, Hand
 import { Navigate, useNavigate } from 'react-router-dom';
 import { clearSession, getUser } from '../../lib/api';
 import Collections from '../finance/Collections';
+import SalesInvoices from '../finance/SalesInvoices';
+import InvoiceDetail from '../finance/InvoiceDetail';
 import Investors from '../finance/Investors';
 import FrontdeskDashboard from './FrontdeskDashboard';
 import OfficeExpenses from './OfficeExpenses';
@@ -17,6 +19,7 @@ import './frontdesk-extra.css';
 import NotificationCenter from '../../components/NotificationCenter';
 
 const sections = [
+  { label: 'Sales', items: [{ key: 'sales', label: 'Sales', icon: ReceiptIndianRupee }] },
   { label: 'Overview', items: [{ key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
   { label: 'Lending', items: [{ key: 'loans', label: 'Loans', icon: BookOpenText }, { key: 'customers', label: 'Customers', icon: Users }, { key: 'collections', label: 'Interest Collection', icon: HandCoins }, { key: 'payouts', label: 'Interest Payouts', icon: CircleDollarSign }, { key: 'reminders', label: 'Due Reminders', icon: BellRing }] },
   { label: 'Cash & Expenses', items: [{ key: 'cashbook', label: 'Cashbook', icon: WalletCards }, { key: 'expenses', label: 'Office Expenses', icon: ReceiptIndianRupee }] },
@@ -25,6 +28,7 @@ const sections = [
 ];
 
 const pageCopy = {
+  sales: ['SALES MANAGEMENT', 'Sales', 'Create customer invoices, manage drafts and track sales balances.'],
   dashboard: ['TODAY’S WORKSPACE', 'Front-desk overview', 'Monitor customers, upcoming interest and collections from one place.'],
   loans: ['LOAN REGISTRATION', 'Loans', 'Register loan applications, track approval and manage approved borrower accounts.'],
   customers: ['CUSTOMER DIRECTORY', 'Customers', 'View borrower profiles automatically created from loan registrations.'],
@@ -41,11 +45,12 @@ export default function FrontdeskApp() {
   const user = getUser();
   const nav = useNavigate();
   const [page, setPage] = useState('dashboard');
+  const [invoiceId, setInvoiceId] = useState(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [preference, setPreference] = useState({ default_company_id: null, default_company_name: 'All Companies' });
   useEffect(() => { api.get('/frontdesk/preferences').then(result => setPreference(result.data || {})).catch(() => {}); }, []);
   if (user?.role !== 'frontdesk') return <Navigate to="/frontdesk/login" replace />;
-  const openPage = key => { setPage(key); setMobileOpen(false); };
+  const openPage = key => { setPage(key); setInvoiceId(null); setMobileOpen(false); };
   const logout = () => { clearSession(); nav('/frontdesk/login', { replace: true }); };
   const copy = pageCopy[page];
 
@@ -61,6 +66,7 @@ export default function FrontdeskApp() {
     <main className="frontdesk-main">
       <header className="frontdesk-page-header"><div className="frontdesk-title"><p className="eyebrow">{copy[0]}</p><h1>{copy[1]}</h1><p>{copy[2]}</p></div><div className="frontdesk-header-tools"><NotificationCenter className="frontdesk-notifications" onTarget={()=>openPage('reminders')}/><div className="frontdesk-date"><small>WORKING DATE</small><strong>{new Intl.DateTimeFormat('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }).format(new Date())}</strong></div></div></header>
       {page === 'dashboard' && <FrontdeskDashboard navigate={openPage} />}
+      {page === 'sales' && (invoiceId ? <InvoiceDetail invoiceId={invoiceId} onBack={() => setInvoiceId(null)} frontdesk /> : <SalesInvoices frontdesk defaultCompanyId={preference.default_company_id} onView={setInvoiceId} />)}
       {page === 'customers' && <CustomerDirectory navigate={openPage}/>} 
       {page === 'loans' && <Collections key={`loans-${preference.default_company_id}`} frontdesk defaultFilter="all" showStats={false} defaultCompanyId={preference.default_company_id}/>} 
       {page === 'collections' && <Collections key={`collections-${preference.default_company_id}`} frontdesk defaultFilter="due" defaultCompanyId={preference.default_company_id}/>} 
