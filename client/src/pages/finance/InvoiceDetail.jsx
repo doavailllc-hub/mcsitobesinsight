@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, getPermissions, getUser } from '../../lib/api';
+import './sales.css';
 import { downloadSalesInvoicePdf } from './invoicePdf';
 
 const money = (value, currency = 'INR') => new Intl.NumberFormat('en-IN', {
@@ -79,6 +80,7 @@ export default function InvoiceDetail({ invoiceId, onBack, frontdesk = false } =
           <div className="invoice-title-block"><span>INVOICE</span><strong>{invoice.invoice_number}</strong></div>
         </header>
         <section className="invoice-info-band">
+          {invoice.salesperson_name && <div className="invoice-client"><span className="invoice-label">SALESPERSON</span><p>{invoice.salesperson_name}</p></div>}
           <div className="invoice-client"><span className="invoice-label">BILL TO</span><h3>{invoice.customer_name}</h3>
             {invoice.customer_address && <p><MapPin size={13} /> {invoice.customer_address}</p>}
             {invoice.customer_email && <p><Mail size={13} /> {invoice.customer_email}</p>}

@@ -12,6 +12,8 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api, getPermissions, getUser } from '../../lib/api';
+import SalesCatalog from './SalesCatalog';
+import './sales.css';
 import { downloadSalesInvoicePdf } from './invoicePdf';
 
 const money = (value, currency = 'INR') =>
@@ -31,6 +33,7 @@ const emptyItem = {
 
 const emptyForm = {
   company_id: '',
+  salesperson_id: '',
   customer_name: '',
   customer_email: '',
   customer_phone: '',
@@ -45,6 +48,9 @@ const emptyForm = {
 };
 
 export default function SalesInvoices({ frontdesk = false, defaultCompanyId = null, onView } = {}) {
+  const [tab, setTab] = useState('invoices');
+  const [catalog, setCatalog] = useState({items:[],categories:[],people:[]});
+  const [catalogLoading, setCatalogLoading] = useState(false);
   const [rows, setRows] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [query, setQuery] = useState('');
@@ -64,6 +70,7 @@ export default function SalesInvoices({ frontdesk = false, defaultCompanyId = nu
 
   const load = async () => {
     try {
+      setError('');
       const response = await api.get('/sales-invoices');
       setRows(response.data || []);
     } catch (err) {
@@ -74,6 +81,17 @@ export default function SalesInvoices({ frontdesk = false, defaultCompanyId = nu
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    setCatalog({items:[],categories:[],people:[]});
+    if (!open || !form.company_id) return;
+    setCatalogLoading(true);
+    api.get('/sales-catalog',{params:{company_id:form.company_id}}).then(({data}) => {if(active) setCatalog(data);})
+      .catch(err => {if(active) setError(err.response?.data?.message || 'Unable to load items and salespeople.');})
+      .finally(() => {if(active) setCatalogLoading(false);});
+    return () => {active=false;};
+  },[open,form.company_id]);
 
   const filtered = useMemo(() => {
     return rows.filter(row => {
@@ -92,12 +110,14 @@ export default function SalesInvoices({ frontdesk = false, defaultCompanyId = nu
   const openCreate = async () => {
     setError('');
     try {
-      const response = await api.get(isFrontdesk ? '/collections/companies' : '/company-options');
+      const response = await api.get('/sales-catalog/companies');
       setCompanies(response.data || []);
       setEditingId(null);
       setForm({
         ...emptyForm,
         company_id: response.data?.some(company => Number(company.id) === Number(defaultCompanyId)) ? defaultCompanyId : '',
+        currency: response.data?.find(company => Number(company.id) === Number(defaultCompanyId))?.currency || 'INR',
+        invoice_date: new Date().toLocaleDateString('en-CA'),
         items: [{ ...emptyItem }]
       });
       setOpen(true);
@@ -116,7 +136,7 @@ export default function SalesInvoices({ frontdesk = false, defaultCompanyId = nu
     try {
       const [companyResponse, detailResponse] =
         await Promise.all([
-          api.get(isFrontdesk ? '/collections/companies' : '/company-options'),
+          api.get('/sales-catalog/companies'),
           api.get(`/sales-invoices/${row.id}`)
         ]);
 
@@ -126,6 +146,7 @@ export default function SalesInvoices({ frontdesk = false, defaultCompanyId = nu
       const invoice = detail.invoice || {};
 
       setForm({
+        salesperson_id: invoice.salesperson_id || '',
         company_id: invoice.company_id || '',
         customer_name: invoice.customer_name || '',
         customer_email: invoice.customer_email || '',
@@ -319,7 +340,9 @@ export default function SalesInvoices({ frontdesk = false, defaultCompanyId = nu
 
 
   return (
-    <>
+    <div className="sales-workspace">
+      <nav className="sales-tabs" aria-label="Sales sections">{[['invoices','Invoices'],['items','Items'],['categories','Categories'],['people','Salespeople']].map(([key,label]) => <button key={key} className={tab===key?'active':''} onClick={() => {setTab(key);setError('');}}>{label}</button>)}</nav>
+      {tab !== 'invoices' ? <SalesCatalog key={tab} kind={tab} defaultCompanyId={defaultCompanyId} canCreate={canCreate} canEdit={canEdit}/> : <>
       {error && !open && <div role="alert" className="error">{error}</div>}
       <div className="toolbar">
         <div className="search">
@@ -525,7 +548,7 @@ export default function SalesInvoices({ frontdesk = false, defaultCompanyId = nu
 
       {open && (
         <div
-          className="finance-modal-backdrop"
+          className="finance-modal-backdrop sales-modal-backdrop"
           onMouseDown={e =>
             e.target === e.currentTarget &&
             !saving &&
@@ -534,6 +557,7 @@ export default function SalesInvoices({ frontdesk = false, defaultCompanyId = nu
         >
           <form
             className="finance-modal invoice-modal"
+            role="dialog" aria-modal="true" aria-label={editingId ? 'Edit draft invoice' : 'New sales invoice'}
             onSubmit={save}
           >
             <div className="invoice-modal-head">
@@ -571,8 +595,10 @@ export default function SalesInvoices({ frontdesk = false, defaultCompanyId = nu
                   onChange={e =>
                     setForm({
                       ...form,
-                      company_id:
-                        e.target.value
+                      company_id: e.target.value,
+                      salesperson_id: '',
+                      items: [{...emptyItem}],
+                      currency: companies.find(company => String(company.id) === e.target.value)?.currency || 'INR'
                     })
                   }
                   disabled={Boolean(editingId)}
@@ -591,6 +617,12 @@ export default function SalesInvoices({ frontdesk = false, defaultCompanyId = nu
                 </select>
               </Field>
 
+              <Field label="Salesperson">
+                <select value={form.salesperson_id || ''} disabled={!form.company_id || catalogLoading} onChange={e => setForm({...form,salesperson_id:e.target.value})}>
+                  <option value="">{catalogLoading ? 'Loading?' : 'No salesperson assigned'}</option>
+                  {catalog.people.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}
+                </select>
+              </Field>
               <Field label="Customer name *">
                 <input
                   required
@@ -747,100 +779,22 @@ export default function SalesInvoices({ frontdesk = false, defaultCompanyId = nu
             </div>
 
             <div className="invoice-items">
-              {form.items.map(
-                (item, index) => (
-                  <div
-                    className="invoice-item-row"
-                    key={index}
-                  >
-                    <input
-                      placeholder="Item / service"
-                      value={item.item_name}
-                      onChange={e =>
-                        setItem(
-                          index,
-                          'item_name',
-                          e.target.value
-                        )
-                      }
-                      required
-                    />
-
-                    <input
-                      placeholder="Description"
-                      value={item.description}
-                      onChange={e =>
-                        setItem(
-                          index,
-                          'description',
-                          e.target.value
-                        )
-                      }
-                    />
-
-                    <input
-                      type="number"
-                      min="0.001"
-                      step="0.001"
-                      placeholder="Qty"
-                      value={item.quantity}
-                      onChange={e =>
-                        setItem(
-                          index,
-                          'quantity',
-                          e.target.value
-                        )
-                      }
-                      required
-                    />
-
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="Rate"
-                      value={item.unit_price}
-                      onChange={e =>
-                        setItem(
-                          index,
-                          'unit_price',
-                          e.target.value
-                        )
-                      }
-                      required
-                    />
-
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.01"
-                      placeholder="Tax %"
-                      value={item.tax_rate}
-                      onChange={e =>
-                        setItem(
-                          index,
-                          'tax_rate',
-                          e.target.value
-                        )
-                      }
-                    />
-
-                    <button
-                      type="button"
-                      className="finance-icon-btn danger"
-                      onClick={() =>
-                        removeItem(index)
-                      }
-                      disabled={
-                        form.items.length === 1
-                      }
-                    >
-                      <Trash2 size={15} />
-                    </button>
-                  </div>
-                )
-              )}
+              {form.items.map((item,index) => {
+                const line = Number(item.quantity || 0)*Number(item.unit_price || 0)*(1+Number(item.tax_rate || 0)/100);
+                return <div className="sales-item-row" key={index}>
+                  <label className="invoice-field sales-category-picker"><span>Category filter</span><select value={item.category_id || ''} onChange={e => setForm(current => ({...current,items:current.items.map((row,i) => i===index ? {...row,category_id:e.target.value,catalog_id:''} : row)}))}><option value="">All categories</option>{catalog.categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+                  <label className="invoice-field sales-item-picker"><span>Saved item / service</span><select disabled={!form.company_id || catalogLoading} value={item.catalog_id || ''} onChange={e => {
+                    const selected=catalog.items.find(row => String(row.id)===e.target.value);
+                    setForm(current => ({...current,items:current.items.map((row,i) => i!==index ? row : selected ? {...row,catalog_id:selected.id,category_id:selected.category_id || '',item_name:selected.name,description:selected.description || '',unit_price:selected.unit_price,tax_rate:selected.tax_rate} : {...row,catalog_id:''})}));
+                  }}><option value="">{catalogLoading ? 'Loading?' : 'Custom item / select saved item'}</option>{catalog.items.filter(row => !item.category_id || String(row.category_id)===String(item.category_id)).map(row => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
+                  <label className="invoice-field sales-item-name"><span>Item / service *</span><input value={item.item_name} onChange={e => setItem(index,'item_name',e.target.value)} placeholder="Item or service name" required/></label>
+                  <label className="invoice-field sales-item-description"><span>Description</span><input value={item.description} onChange={e => setItem(index,'description',e.target.value)} placeholder="Optional details"/></label>
+                  <label className="invoice-field"><span>Quantity *</span><input type="number" min="0.001" step="0.001" value={item.quantity} onChange={e => setItem(index,'quantity',e.target.value)} required/></label>
+                  <label className="invoice-field"><span>Unit price *</span><input type="number" min="0" step="0.01" value={item.unit_price} onChange={e => setItem(index,'unit_price',e.target.value)} placeholder="0.00" required/></label>
+                  <label className="invoice-field"><span>Tax (%)</span><input type="number" min="0" max="100" step="0.01" value={item.tax_rate} onChange={e => setItem(index,'tax_rate',e.target.value)}/></label>
+                  <div className="sales-line-total"><span>Line total<strong>{money(line,form.currency)}</strong></span><button type="button" className="finance-icon-btn danger" aria-label={`Remove item ${index+1}`} onClick={() => removeItem(index)} disabled={form.items.length===1}><Trash2 size={16}/></button></div>
+                </div>;
+              })}
             </div>
 
             <div className="invoice-summary">
@@ -948,7 +902,8 @@ export default function SalesInvoices({ frontdesk = false, defaultCompanyId = nu
           </form>
         </div>
       )}
-    </>
+      </>}
+    </div>
   );
 }
 

@@ -1,4 +1,5 @@
 import express from 'express';
+import { ensureSalesCatalog, registerSalesCatalog, validateSalesperson, saveInvoiceSalesperson } from './salesCatalog.js';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
@@ -4093,6 +4094,8 @@ const requireSalesPermission = permissionKey => safe(async (req, res, next) => {
   next();
 });
 
+registerSalesCatalog(app, { q, safe, requireSalesPermission, hasEffectivePermission, companyIdsFromAccess, audit });
+
 app.get(
   '/api/sales-invoices',
   requireSalesPermission('finance.view'),
@@ -4317,7 +4320,8 @@ app.get(
       'SELECT * FROM finance_invoice_settings WHERE company_id=? LIMIT 1',
       [invoice.company_id]
     );
-    res.json({ invoice, items, payments, invoice_settings: invoiceSettings || null });
+    const [salesperson] = await q('SELECT salesperson_id,salesperson_name FROM sales_invoice_people WHERE invoice_id=?',[invoiceId]);
+    res.json({ invoice: { ...invoice, ...salesperson }, items, payments, invoice_settings: invoiceSettings || null });
   })
 );
 
@@ -4373,6 +4377,8 @@ app.post(
         items,
         discount_amount
       );
+
+    const salesperson = await validateSalesperson(q, company_id, req.body.salesperson_id);
 
     const conn =
       await pool.getConnection();
@@ -4531,6 +4537,7 @@ app.post(
         ]
       );
 
+      await saveInvoiceSalesperson(conn, invoiceId, salesperson);
       await conn.commit();
 
       res.status(201).json({
@@ -4638,6 +4645,8 @@ app.put(
         discount_amount
       );
 
+    const salesperson = await validateSalesperson(q, existing.company_id, req.body.salesperson_id);
+
     const conn =
       await pool.getConnection();
 
@@ -4744,6 +4753,7 @@ app.put(
         ]
       );
 
+      await saveInvoiceSalesperson(conn, invoiceId, salesperson);
       await conn.commit();
 
       res.json({ ok: true });
@@ -6291,4 +6301,6 @@ await q(`CREATE TABLE IF NOT EXISTS program_registry (
 )`);
 
 const port = Number(process.env.PORT || 5000);
+await ensureSalesCatalog(q);
+
 app.listen(port, () => console.log(`Insight API running on http://localhost:${port}`));
