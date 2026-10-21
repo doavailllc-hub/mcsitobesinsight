@@ -1,6 +1,25 @@
 const fail = message => { const error = new Error(message); error.statusCode = 400; throw error; };
 
 export async function ensureSalesCatalog(q) {
+  await q(`CREATE TABLE IF NOT EXISTS sales_invoices (
+    id INT AUTO_INCREMENT PRIMARY KEY, company_id INT NOT NULL, invoice_number VARCHAR(80) UNIQUE,
+    customer_name VARCHAR(180) NOT NULL, customer_email VARCHAR(180), customer_phone VARCHAR(60),
+    customer_address TEXT, customer_tax_number VARCHAR(100), invoice_date DATE NOT NULL, due_date DATE,
+    currency CHAR(3) NOT NULL DEFAULT 'INR', subtotal DECIMAL(15,2) NOT NULL DEFAULT 0,
+    tax_rate DECIMAL(5,2) NOT NULL DEFAULT 0, tax_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+    discount_amount DECIMAL(15,2) NOT NULL DEFAULT 0, total_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+    paid_amount DECIMAL(15,2) NOT NULL DEFAULT 0, balance_amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+    status VARCHAR(30) NOT NULL DEFAULT 'draft', notes TEXT, terms TEXT, created_by INT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY ix_sales_invoice_company(company_id,invoice_date), KEY ix_sales_invoice_status(company_id,status,due_date),
+    FOREIGN KEY(company_id) REFERENCES companies(id) ON DELETE CASCADE,
+    FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL)`);
+  await q(`CREATE TABLE IF NOT EXISTS sales_invoice_items (
+    id INT AUTO_INCREMENT PRIMARY KEY, invoice_id INT NOT NULL, item_name VARCHAR(180) NOT NULL,
+    description TEXT, quantity DECIMAL(15,3) NOT NULL, unit_price DECIMAL(15,2) NOT NULL,
+    line_subtotal DECIMAL(15,2) NOT NULL, tax_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+    tax_amount DECIMAL(15,2) NOT NULL DEFAULT 0, line_total DECIMAL(15,2) NOT NULL, sort_order INT NOT NULL DEFAULT 0,
+    KEY ix_sales_invoice_item(invoice_id,sort_order), FOREIGN KEY(invoice_id) REFERENCES sales_invoices(id) ON DELETE CASCADE)`);
   await q(`CREATE TABLE IF NOT EXISTS sales_categories (
     id INT AUTO_INCREMENT PRIMARY KEY, company_id INT NOT NULL, name VARCHAR(180) NOT NULL,
     UNIQUE KEY uq_sales_category(company_id,name), FOREIGN KEY(company_id) REFERENCES companies(id))`);
