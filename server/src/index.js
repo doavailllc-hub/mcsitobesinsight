@@ -521,11 +521,12 @@ app.use((req, res, next) => {
 app.get('/api/health', (req, res) => res.json({ ok: true, service: 'Insight MCSITOBES API' }));
 
 app.post('/api/auth/login', safe(async (req, res) => {
-  const { email, password } = req.body;
-  const rows = await q('SELECT * FROM users WHERE email=? AND status="active" LIMIT 1', [text(email).toLowerCase()]);
+  const identifier = text(req.body?.identifier || req.body?.email).toLowerCase();
+  const password = String(req.body?.password || '');
+  const rows = await q('SELECT * FROM users WHERE LOWER(email)=? AND status="active" LIMIT 1', [identifier]);
   const u = rows[0];
   if (!u || !await bcrypt.compare(password, u.password_hash))
-    return res.status(401).json({ message: 'Invalid email or password' });
+    return res.status(401).json({ message: 'Invalid username/email or password' });
 
   const token = jwt.sign(
     { id: u.id, email: u.email, role: u.role },

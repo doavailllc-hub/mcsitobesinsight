@@ -6,7 +6,7 @@ import insightLogo from '../assets/insight-logo.png';
 
 export default function Login() {
   const nav = useNavigate();
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
   const [remember, setRemember] = useState(true);
@@ -16,10 +16,10 @@ export default function Login() {
   async function submit(event) {
     event.preventDefault();
     setError('');
-    if (!email.trim() || !password) return setError('Enter your email and password.');
+    if (!identifier.trim() || !password) return setError('Enter your username or email and password.');
     setLoading(true);
     try {
-      const { data } = await api.post('/auth/login', { email: email.trim(), password });
+      const { data } = await api.post('/auth/login', { identifier: identifier.trim(), password });
       setSession(data.token, data.user, remember);
       nav('/');
     } catch (requestError) {
@@ -35,7 +35,7 @@ export default function Login() {
       <p className="eyebrow">WELCOME BACK</p><h1>Sign in to Insight</h1><p>Use your approved business account to continue.</p>
     </div>
     <form className="auth-form" onSubmit={submit}>
-      <label><span>Email address</span><div className="auth-input"><Mail size={16} /><input autoFocus autoComplete="email" type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="name@company.com" /></div></label>
+      <label><span>Username or email</span><div className="auth-input"><Mail size={16} /><input autoFocus autoComplete="username" type="text" value={identifier} onChange={event => setIdentifier(event.target.value)} placeholder="Enter username or email" /></div></label>
       <label><span>Password</span><div className="auth-input"><LockKeyhole size={16} /><input autoComplete="current-password" type={show ? 'text' : 'password'} value={password} onChange={event => setPassword(event.target.value)} placeholder="Enter your password" /><button type="button" onClick={() => setShow(!show)} aria-label={show ? 'Hide password' : 'Show password'}>{show ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
       <div className="auth-options"><label><input type="checkbox" checked={remember} onChange={event => setRemember(event.target.checked)} />Remember me</label><span>Contact your administrator to reset access</span></div>
       {error && <div className="auth-error">{error}</div>}
