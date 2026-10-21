@@ -200,6 +200,7 @@ export default function App() {
           <Route path="investors" element={<Investors />} />
         </Route>
         <Route path="/loans" element={protect('finance.view', <Collections standalone />)} />
+        <Route path="/stock" element={protect('finance.view', <DataModule type="stock" />)} />
 
         <Route
           path="/partner-operations"

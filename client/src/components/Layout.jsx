@@ -28,6 +28,7 @@ import {
   ,Handshake
   ,ChartNoAxesCombined
   ,ClipboardCheck
+  ,PackageSearch
 } from 'lucide-react';
 
 import {
@@ -58,9 +59,10 @@ const sections = [
     ]
   },
   {
-    label: 'Finance',
+    label: 'Accounts',
     items: [
       ['Finance & Accounts', '/finance', Wallet, 'finance.view'],
+      ['Stock', '/stock', PackageSearch, 'finance.view'],
       ['Sales', '/finance/invoices', ScrollText, 'finance.view'],
       ['Loans', '/loans', BadgeIndianRupee, 'finance.view'],
       ['Investors', '/finance/investors', Handshake, 'finance.view'],
@@ -69,7 +71,7 @@ const sections = [
     ]
   },
   {
-    label: 'People',
+    label: 'HR',
     items: [
       ['Employees', '/employees', UserRound, 'employees.view']
     ]

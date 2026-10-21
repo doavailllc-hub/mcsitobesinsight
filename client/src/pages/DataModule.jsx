@@ -96,6 +96,19 @@ const config = {
       { key: 'status', label: 'Status', type: 'select', options: ['Available', 'Assigned', 'Repair', 'Retired', 'Sold'], default: 'Available' }
     ]
   },
+  stock: {
+    title: 'Stock', subtitle: 'Track inventory batches, quantities, locations and expiry dates across all companies.', endpoint: '/stock',
+    cols: ['item_name','company_name','department','batch_number','quantity','expiry_date','status'],
+    fields: [
+      { key:'company_id',label:'Company',type:'company',required:true }, { key:'item_name',label:'Item name',required:true,placeholder:'N95 Mask, Isolation Gown...' },
+      { key:'sku',label:'SKU / Item code',placeholder:'PPE-N95-001' }, { key:'category',label:'Category',placeholder:'PPE, Medical supply, Consumable...' },
+      { key:'department',label:'Department',placeholder:'CSSD, Laboratory, Dental...' }, { key:'batch_number',label:'Batch number' },
+      { key:'quantity',label:'Quantity on hand',type:'number',min:0,step:'1',required:true,default:0 }, { key:'unit',label:'Unit',placeholder:'Pieces, boxes, packs',default:'Pieces' },
+      { key:'received_date',label:'Received date',type:'date' }, { key:'expiry_date',label:'Expiry date',type:'date',required:true },
+      { key:'location',label:'Storage location' }, { key:'minimum_level',label:'Minimum stock level',type:'number',min:0,step:'1',default:0 },
+      { key:'unit_cost',label:'Unit cost',type:'number',min:0,step:'0.01',default:0 }, { key:'notes',label:'Notes',type:'textarea',full:true }
+    ]
+  },
   offices: {
     title: 'Offices',
     subtitle: 'Office leases, rents, landlords and operating locations.',
@@ -239,10 +252,11 @@ const config = {
 };
 
 const pretty = s => s.replaceAll('_', ' ').replace(/\b\w/g, m => m.toUpperCase());
-const moneyKeys = new Set(['amount', 'salary', 'gross_salary', 'deduction', 'net_salary', 'monthly_rent', 'purchase_cost', 'security_deposit']);
+const moneyKeys = new Set(['amount', 'salary', 'gross_salary', 'deduction', 'net_salary', 'monthly_rent', 'purchase_cost', 'security_deposit', 'unit_cost']);
 
 const workspaceMeta = {
   assets: { kicker: 'ASSET OPERATIONS', icon: Boxes, action: 'Register asset', hint: 'Equipment custody, warranty and lifecycle control' },
+  stock: { kicker: 'ACCOUNTS / INVENTORY', icon: Boxes, action: 'Add stock batch', hint: 'Batch-level quantity and expiry control' },
   domains: { kicker: 'DIGITAL PROPERTY', icon: Globe2, action: 'Add domain', hint: 'Renewals, ownership and registrar visibility' },
   emails: { kicker: 'EMAIL ADMINISTRATION', icon: Mail, action: 'Add account', hint: 'Licenses, assignments and account health' },
   social: { kicker: 'BRAND CHANNELS', icon: Share2, action: 'Add channel', hint: 'Official profiles, managers and channel status' },
@@ -259,6 +273,7 @@ function workspaceStats(type, rows) {
     ['Available', rows.filter(r => String(r.status).toLowerCase() === 'available').length, 'Ready for allocation'],
     ['Companies', companies, 'Represented entities']
   ];
+  if (type === 'stock') return [['Total units',rows.reduce((s,r)=>s+Number(r.quantity||0),0).toLocaleString(),'Quantity currently recorded'],['Expired',rows.filter(r=>r.status==='Expired').length,'Remove from available stock'],['Expiring soon',rows.filter(r=>r.status==='Expiring soon').length,'Within the next 30 days'],['Low stock',rows.filter(r=>Number(r.quantity||0)<=Number(r.minimum_level||0)).length,'At or below minimum level']];
   if (type === 'domains') {
     const limit = new Date(); limit.setDate(limit.getDate() + 90);
     const expiring = rows.filter(r => r.expiry_date && new Date(r.expiry_date) <= limit && new Date(r.expiry_date) >= new Date()).length;
@@ -302,6 +317,7 @@ const actionPermissions = {
     edit: 'assets.manage',
     delete: 'assets.manage'
   },
+  stock: { create:'finance.create', edit:'finance.edit', delete:'finance.delete' },
   offices: {
     create: 'offices.manage',
     edit: 'offices.manage',

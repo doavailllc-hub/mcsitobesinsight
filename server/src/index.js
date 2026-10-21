@@ -1949,6 +1949,7 @@ app.post('/api/assets', requireEffectivePermission('assets.manage'), requireBody
   await audit(req, 'Created asset', 'asset', text(name));
   res.status(201).json({ id: result.insertId });
 }));
+app.post('/api/stock', requireEffectivePermission('finance.create'), requireBodyCompanyAccess('finance.create'), safe(async(req,res)=>{const {company_id,item_name,sku,category,department,batch_number,quantity,unit='Pieces',received_date,expiry_date,location,minimum_level=0,unit_cost=0,notes}=req.body;const qty=Number(quantity),minimum=Number(minimum_level),cost=Number(unit_cost);if(!company_id||!text(item_name)||!expiry_date)return res.status(400).json({message:'Company, item name and expiry date are required'});if(!Number.isInteger(qty)||qty<0||!Number.isInteger(minimum)||minimum<0||!Number.isFinite(cost)||cost<0)return res.status(400).json({message:'Quantity, minimum level and unit cost must be valid non-negative values'});const result=await q(`INSERT INTO stock_batches (company_id,item_name,sku,category,department,batch_number,quantity,unit,received_date,expiry_date,location,minimum_level,unit_cost,notes,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,[company_id,text(item_name),text(sku),text(category),text(department),text(batch_number),qty,text(unit)||'Pieces',nullable(received_date),expiry_date,text(location),minimum,cost,text(notes),req.user.id]);await audit(req,'Created stock batch','stock',text(item_name));res.status(201).json({id:result.insertId});}));
 
 app.post('/api/offices', requireEffectivePermission('offices.manage'), requireBodyCompanyAccess('offices.manage'), safe(async (req, res) => {
   const {
@@ -2506,6 +2507,7 @@ const crud = {
     companyFromBody: body => Number(body.company_id),
     name: row => row.name
   },
+  stock: {table:'stock_batches',fields:['company_id','item_name','sku','category','department','batch_number','quantity','unit','received_date','expiry_date','location','minimum_level','unit_cost','notes'],detail:`SELECT id,company_id,item_name,sku,category,department,batch_number,quantity,unit,DATE_FORMAT(received_date,'%Y-%m-%d') received_date,DATE_FORMAT(expiry_date,'%Y-%m-%d') expiry_date,location,minimum_level,unit_cost,notes FROM stock_batches WHERE id=?`,viewPermission:'finance.view',managePermission:'finance.edit',deletePermission:'finance.delete',companyFromRow:r=>Number(r.company_id),companyFromBody:b=>Number(b.company_id),name:r=>r.item_name},
   offices: {
     table: 'offices',
     fields: [
@@ -2995,6 +2997,7 @@ for (const [path, cfg] of Object.entries(crud)) {
       if (path === 'files') {
         body.confidential = body.confidential ? 1 : 0;
       }
+      if(path==='stock'){const qty=Number(body.quantity),minimum=Number(body.minimum_level),cost=Number(body.unit_cost);if(!text(body.item_name)||!body.expiry_date)return res.status(400).json({message:'Item name and expiry date are required'});if(!Number.isInteger(qty)||qty<0||!Number.isInteger(minimum)||minimum<0||!Number.isFinite(cost)||cost<0)return res.status(400).json({message:'Quantity, minimum level and unit cost must be valid non-negative values'});}
 
       const dateFields = new Set([
         'date','joining_date','paid_date','due_date','purchase_date',
@@ -3038,7 +3041,7 @@ for (const [path, cfg] of Object.entries(crud)) {
 
   app.delete(
     `/api/${path}/:id`,
-    requireEffectivePermission(cfg.managePermission),
+    requireEffectivePermission(cfg.deletePermission || cfg.managePermission),
     safe(async (req, res) => {
       const [before] = await q(cfg.detail, [req.params.id]);
 
@@ -3063,7 +3066,7 @@ for (const [path, cfg] of Object.entries(crud)) {
         companyId &&
         !hasEffectivePermission(
           access,
-          cfg.managePermission,
+          cfg.deletePermission || cfg.managePermission,
           companyId
         )
       ) {
@@ -3447,6 +3450,7 @@ const secureLists = {
           FROM assets a
           JOIN companies c ON c.id=a.company_id`
   },
+  stock:{permission:'finance.view',companyColumn:'s.company_id',sql:`SELECT s.id,s.company_id,s.item_name,s.sku,s.category,s.department,s.batch_number,s.quantity,s.unit,DATE_FORMAT(s.received_date,'%Y-%m-%d') received_date,DATE_FORMAT(s.expiry_date,'%Y-%m-%d') expiry_date,s.location,s.minimum_level,s.unit_cost,CASE WHEN s.expiry_date<CURDATE() THEN 'Expired' WHEN s.expiry_date<=DATE_ADD(CURDATE(),INTERVAL 30 DAY) THEN 'Expiring soon' ELSE 'Valid' END status,c.name company_name FROM stock_batches s JOIN companies c ON c.id=s.company_id`},
   offices: {
     permission: 'offices.view',
     companyColumn: 'o.company_id',
@@ -6289,6 +6293,7 @@ await q(`CREATE TABLE IF NOT EXISTS partner_meeting_responses (id INT AUTO_INCRE
 await q(`CREATE TABLE IF NOT EXISTS notifications (id BIGINT AUTO_INCREMENT PRIMARY KEY,user_id INT NOT NULL,title VARCHAR(180) NOT NULL,message VARCHAR(700) NOT NULL,type VARCHAR(30) NOT NULL DEFAULT 'info',target_path VARCHAR(255),dedupe_key VARCHAR(255),is_read TINYINT(1) NOT NULL DEFAULT 0,read_at DATETIME NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,UNIQUE KEY uq_notification_dedupe(user_id,dedupe_key),KEY ix_notification_inbox(user_id,is_read,created_at),FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)`);
 await q(`CREATE TABLE IF NOT EXISTS finance_investors (id INT AUTO_INCREMENT PRIMARY KEY,company_id INT NOT NULL,investor_name VARCHAR(180) NOT NULL,phone VARCHAR(40),email VARCHAR(180),id_number VARCHAR(100),investment_amount DECIMAL(15,2) NOT NULL,interest_rate DECIMAL(8,4) NOT NULL,interest_type ENUM('flat_amount','percentage') NOT NULL DEFAULT 'percentage',monthly_interest_amount DECIMAL(15,2) NOT NULL,investment_date DATE NOT NULL,next_interest_date DATE NOT NULL,payment_method VARCHAR(60) DEFAULT 'Bank transfer',reference_no VARCHAR(100),status ENUM('active','closed') NOT NULL DEFAULT 'active',notes TEXT,created_by INT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,KEY ix_finance_investor_due(company_id,status,next_interest_date),FOREIGN KEY(company_id) REFERENCES companies(id) ON DELETE CASCADE,FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL)`);
 await q(`CREATE TABLE IF NOT EXISTS finance_investor_interest_payments (id INT AUTO_INCREMENT PRIMARY KEY,investor_id INT NOT NULL,receipt_number VARCHAR(100) NOT NULL UNIQUE,amount DECIMAL(15,2) NOT NULL,payment_date DATE NOT NULL,interest_for_date DATE NOT NULL,periods_count INT NOT NULL DEFAULT 1,payment_method VARCHAR(60) NOT NULL DEFAULT 'Bank transfer',reference_no VARCHAR(100),notes TEXT,paid_by INT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,KEY ix_investor_interest_payment(investor_id,payment_date),FOREIGN KEY(investor_id) REFERENCES finance_investors(id) ON DELETE CASCADE,FOREIGN KEY(paid_by) REFERENCES users(id) ON DELETE SET NULL)`);
+await q(`CREATE TABLE IF NOT EXISTS stock_batches (id INT AUTO_INCREMENT PRIMARY KEY,company_id INT NOT NULL,item_name VARCHAR(180) NOT NULL,sku VARCHAR(80),category VARCHAR(100),department VARCHAR(120),batch_number VARCHAR(100),quantity INT UNSIGNED NOT NULL DEFAULT 0,unit VARCHAR(40) NOT NULL DEFAULT 'Pieces',received_date DATE NULL,expiry_date DATE NOT NULL,location VARCHAR(180),minimum_level INT UNSIGNED NOT NULL DEFAULT 0,unit_cost DECIMAL(15,2) NOT NULL DEFAULT 0,notes TEXT,created_by INT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,KEY ix_stock_company_expiry(company_id,expiry_date),KEY ix_stock_company_item(company_id,item_name),FOREIGN KEY(company_id) REFERENCES companies(id) ON DELETE CASCADE,FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL)`);
 
 await q(`CREATE TABLE IF NOT EXISTS program_registry (
   id INT AUTO_INCREMENT PRIMARY KEY,program_name VARCHAR(180) NOT NULL,environment VARCHAR(40) NOT NULL DEFAULT 'production',

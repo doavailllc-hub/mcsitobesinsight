@@ -1182,6 +1182,7 @@ html,body,#root{max-width:100%;min-width:0}body{overflow-x:hidden}.main,.page,.t
   box-shadow: 0 15px 40px rgba(25,51,65,.15);
 }
 .module-assets .module-hero { background: linear-gradient(120deg,#17282a,#21484a 62%,#39706c); }
+.module-stock .module-hero { background: linear-gradient(120deg,#15352f,#1f5a4e 62%,#3b806d); }
 .module-domains .module-hero { background: linear-gradient(120deg,#17243b,#243f68 62%,#386c98); }
 .module-emails .module-hero { background: linear-gradient(120deg,#242039,#38325b 62%,#5a5083); }
 .module-social .module-hero { background: linear-gradient(120deg,#301f2d,#533047 62%,#7a4864); }
